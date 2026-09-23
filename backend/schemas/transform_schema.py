@@ -51,6 +51,14 @@ class TransformRequest(BaseModel):
         default=None,
         description="Optional original filename of the uploaded image"
     )
+    video_data: Optional[str] = Field(
+        default=None,
+        description="Optional base64-encoded video data or data URI for multimodal processing (.mp4, .webm, .mov)"
+    )
+    video_name: Optional[str] = Field(
+        default=None,
+        description="Optional original filename of the uploaded video"
+    )
 
 
 class TransformResponse(BaseModel):

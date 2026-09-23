@@ -35,6 +35,12 @@ function App() {
   const [imagePreview, setImagePreview] = useState(null);
   const imageInputRef = useRef(null);
 
+  // Video upload state (.mp4, .webm, .mov)
+  const [videoName, setVideoName] = useState(null);
+  const [videoPreview, setVideoPreview] = useState(null);
+  const [videoSize, setVideoSize] = useState(null);
+  const videoInputRef = useRef(null);
+
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   const [result, setResult] = useState(null);
@@ -135,11 +141,57 @@ function App() {
     }
   };
 
+  // Video upload handler (.mp4, .webm, .mov)
+  const handleVideoUpload = (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    const extension = file.name.split('.').pop().toLowerCase();
+    if (!['mp4', 'webm', 'mov'].includes(extension)) {
+      setError(`Unsupported video format (.${extension}). Supported formats are: .mp4, .webm, .mov.`);
+      return;
+    }
+
+    // 25MB limit for MVP base64 handling
+    if (file.size > 25 * 1024 * 1024) {
+      setError(`Video file is too large (${(file.size / (1024 * 1024)).toFixed(1)}MB). Please upload a video under 25MB for the MVP.`);
+      return;
+    }
+
+    setError(null);
+    const sizeStr = file.size > 1024 * 1024
+      ? `${(file.size / (1024 * 1024)).toFixed(1)} MB`
+      : `${Math.round(file.size / 1024)} KB`;
+
+    const reader = new FileReader();
+    reader.onload = () => {
+      setVideoPreview(reader.result);
+      setVideoName(file.name);
+      setVideoSize(sizeStr);
+      if (!sourceContent.trim()) {
+        setSourceContent(`[Video Source: ${file.name}]\nPlease analyze and transform the visual scenes, demonstrations, dialogue, and key topics from this attached video.`);
+      }
+    };
+    reader.onerror = () => {
+      setError('Failed to read the selected video file.');
+    };
+    reader.readAsDataURL(file);
+  };
+
+  const handleClearVideo = () => {
+    setVideoPreview(null);
+    setVideoName(null);
+    setVideoSize(null);
+    if (videoInputRef.current) {
+      videoInputRef.current.value = '';
+    }
+  };
+
   const handleTransform = async (e) => {
     e.preventDefault();
 
-    if (!sourceContent.trim() && !imagePreview) {
-      setError('Please provide source content or upload an image to transform.');
+    if (!sourceContent.trim() && !imagePreview && !videoPreview) {
+      setError('Please provide source content, or upload a document, image, or video to transform.');
       return;
     }
 
@@ -152,7 +204,7 @@ function App() {
     setError(null);
 
     const payload = {
-      source_content: sourceContent.trim() || `[Visual Analysis of ${imageName || 'attached image'}]`,
+      source_content: sourceContent.trim() || `[Multimodal Analysis of ${videoName || imageName || 'attached media'}]`,
       output_types: outputTypes,
       target_audience: targetAudience.trim() || null,
       tone: tone || null,
@@ -163,6 +215,8 @@ function App() {
       document_name: documentName || null,
       image_data: imagePreview || null,
       image_name: imageName || null,
+      video_data: videoPreview || null,
+      video_name: videoName || null,
     };
 
     try {
@@ -267,6 +321,20 @@ function App() {
                       🖼️ Upload Image
                     </label>
                   </div>
+                  <div className="video-upload-wrapper">
+                    <input
+                      type="file"
+                      ref={videoInputRef}
+                      onChange={handleVideoUpload}
+                      accept="video/mp4,video/webm,video/quicktime,.mp4,.webm,.mov"
+                      style={{ display: 'none' }}
+                      id="video-upload-input"
+                      disabled={loading || extracting}
+                    />
+                    <label htmlFor="video-upload-input" className="btn-video-upload">
+                      🎥 Upload Video
+                    </label>
+                  </div>
                 </div>
               </div>
 
@@ -306,14 +374,38 @@ function App() {
                 </div>
               )}
 
+              {videoPreview && (
+                <div className="video-loaded-badge">
+                  <div className="video-loaded-info">
+                    <div className="video-preview-wrapper">
+                      <video src={videoPreview} className="video-thumb" muted preload="metadata" />
+                      <span className="video-icon-overlay">▶</span>
+                    </div>
+                    <div className="video-loaded-meta">
+                      <span className="video-name">🎥 <strong>{videoName}</strong> {videoSize && <span className="video-size-tag">({videoSize})</span>}</span>
+                      <span className="video-desc">Video attached for multimodal AI understanding (.mp4, .webm, .mov)</span>
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    className="btn-video-clear"
+                    onClick={handleClearVideo}
+                    disabled={loading || extracting}
+                    title="Remove attached video"
+                  >
+                    ✕
+                  </button>
+                </div>
+              )}
+
               <textarea
                 id="source-content"
                 className="form-textarea"
-                placeholder="Paste or write notes, upload a document (.txt, .pdf, .docx), or attach an image (.png, .jpg, .webp)..."
+                placeholder="Paste or write notes, upload a document (.txt, .pdf, .docx), attach an image, or upload a video (.mp4, .webm, .mov)..."
                 value={sourceContent}
                 onChange={(e) => setSourceContent(e.target.value)}
                 disabled={loading || extracting}
-                required={!imagePreview}
+                required={!imagePreview && !videoPreview}
               />
             </div>
 
@@ -465,7 +557,7 @@ function App() {
             <button
               type="submit"
               className="btn-primary"
-              disabled={loading || extracting || (!sourceContent.trim() && !imagePreview) || outputTypes.length === 0}
+              disabled={loading || extracting || (!sourceContent.trim() && !imagePreview && !videoPreview) || outputTypes.length === 0}
             >
               {loading ? (
                 <>
@@ -553,6 +645,11 @@ function App() {
                 {result.metadata?.image_name && (
                   <span className="metadata-chip">
                     Image: <strong>{result.metadata.image_name}</strong>
+                  </span>
+                )}
+                {result.metadata?.video_name && (
+                  <span className="metadata-chip">
+                    Video: <strong>{result.metadata.video_name}</strong>
                   </span>
                 )}
                 {result.metadata?.target_audience && (

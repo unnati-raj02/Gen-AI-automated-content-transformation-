@@ -17,19 +17,30 @@ from schemas.transform_schema import TransformRequest, TransformResponse
 load_dotenv()
 
 
-def parse_image_data(image_data: str) -> Tuple[str, bytes]:
+def parse_media_data(media_data: str, default_mime: str = "image/png") -> Tuple[str, bytes]:
     """
-    Parses a data URI (data:image/...;base64,...) or raw base64 string
+    Parses a data URI (data:<mime_type>;base64,...) or raw base64 string
     and returns (mime_type, raw_bytes).
+    Supports images (.png, .jpg, .webp, .gif) and videos (.mp4, .webm, .mov).
     """
-    cleaned = image_data.strip()
+    cleaned = media_data.strip()
     if cleaned.startswith("data:"):
         match = re.match(r"^data:([^;]+);base64,(.+)$", cleaned, re.DOTALL)
         if match:
             mime_type = match.group(1).strip()
             raw_b64 = match.group(2).strip()
             return mime_type, base64.b64decode(raw_b64)
-    return "image/png", base64.b64decode(cleaned)
+    return default_mime, base64.b64decode(cleaned)
+
+
+def parse_image_data(image_data: str) -> Tuple[str, bytes]:
+    """Parses base64 image data (defaulting to image/png)."""
+    return parse_media_data(image_data, default_mime="image/png")
+
+
+def parse_video_data(video_data: str) -> Tuple[str, bytes]:
+    """Parses base64 video data (defaulting to video/mp4)."""
+    return parse_media_data(video_data, default_mime="video/mp4")
 
 
 def build_prompt(
@@ -42,7 +53,8 @@ def build_prompt(
     communication_objective: Optional[str] = None,
     content_style: Optional[str] = None,
     document_name: Optional[str] = None,
-    image_name: Optional[str] = None
+    image_name: Optional[str] = None,
+    video_name: Optional[str] = None
 ) -> str:
     """
     Constructs a structured prompt for the LLM based on source content
@@ -50,6 +62,7 @@ def build_prompt(
     """
     doc_spec = f"\n- Source Document Name: {document_name}" if document_name else ""
     img_spec = f"\n- Attached Source Image: {image_name} (Analyze and synthesize all visual charts, diagrams, graphics, and text from the image)" if image_name else ""
+    vid_spec = f"\n- Attached Source Video: {video_name} (Thoroughly examine visual narrative, scene progression, demonstrations, on-screen text, and spoken audio in the video)" if video_name else ""
     return f"""You are an expert AI content transformer.
 Transform the provided source content into the requested communication artefact.
 
@@ -60,7 +73,7 @@ TRANSFORMATION SPECIFICATIONS:
 - Communication Objective: {communication_objective or 'Inform'}
 - Content Style: {content_style or 'Direct & Concise'}
 - Language: {language}
-- Detail Level: {detail_level}{doc_spec}{img_spec}
+- Detail Level: {detail_level}{doc_spec}{img_spec}{vid_spec}
 
 SOURCE CONTENT:
 \"\"\"
@@ -82,7 +95,8 @@ INSTRUCTIONS:
    - If Presentation: Provide a slide-by-slide structure with 4-6 slides (e.g. Title/Agenda, Context/Problem, Key Solution/Findings, Strategic Impact, and Next Steps). For every slide, clearly provide: Slide Title, 3-4 concise Bullet Points, and Speaker Notes.
    - If Video Package: Provide a complete production package including Video Objective & Target Duration (e.g., 60-90s), Full Voiceover Script, Scene-by-Scene Storyboard breakdown (Scene number, Visual Description/Action, On-Screen Text / Subtitles, and Narration), and Production Recommendations (music mood, pacing, and visual style).
 7. If an attached image is provided, thoroughly examine and interpret its visual components (diagrams, flowcharts, data graphs, illustrations, or embedded text) and integrate those insights directly into the output.
-8. Do NOT include conversational filler, introductory remarks, or meta-commentary (e.g., do not say "Here is your summary"). Directly output the transformed artefact.
+8. If an attached video is provided, thoroughly examine and interpret its visual scenes, motion progression, on-screen text/chyrons, demonstrations, and spoken audio track, integrating those insights directly into the output.
+9. Do NOT include conversational filler, introductory remarks, or meta-commentary (e.g., do not say "Here is your summary"). Directly output the transformed artefact.
 """
 
 
@@ -102,6 +116,8 @@ def mock_transform_content(request: TransformRequest) -> TransformResponse:
     snippet = source[:120] + "..." if len(source) > 120 else source
     if request.image_name:
         snippet += f" [Attached Image: {request.image_name}]"
+    if request.video_name:
+        snippet += f" [Attached Video: {request.video_name}]"
 
     outputs = {}
     for output_type in request.output_types:
@@ -260,6 +276,7 @@ def mock_transform_content(request: TransformRequest) -> TransformResponse:
             "source_character_count": len(source),
             "document_name": request.document_name,
             "image_name": request.image_name,
+            "video_name": request.video_name,
             "is_mock": True
         }
     )
@@ -308,16 +325,26 @@ def transform_content(request: TransformRequest) -> TransformResponse:
             )
         )
 
-    # 4. Handle optional multimodal image input
-    image_part = None
+    # 4. Handle optional multimodal image & video inputs
+    multimodal_parts = []
     if request.image_data:
         try:
             mime_type, img_bytes = parse_image_data(request.image_data)
-            image_part = {"mime_type": mime_type, "data": img_bytes}
+            multimodal_parts.append({"mime_type": mime_type, "data": img_bytes})
         except Exception as e:
             raise HTTPException(
                 status_code=400,
                 detail=f"Invalid image data: {str(e)}"
+            )
+
+    if request.video_data:
+        try:
+            mime_type, vid_bytes = parse_video_data(request.video_data)
+            multimodal_parts.append({"mime_type": mime_type, "data": vid_bytes})
+        except Exception as e:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid video data: {str(e)}"
             )
 
     # 5. Call LLM for each output type with error handling
@@ -337,10 +364,11 @@ def transform_content(request: TransformRequest) -> TransformResponse:
                 communication_objective=objective,
                 content_style=style,
                 document_name=request.document_name,
-                image_name=request.image_name
+                image_name=request.image_name,
+                video_name=request.video_name
             )
 
-            content_payload = [prompt, image_part] if image_part else prompt
+            content_payload = [prompt] + multimodal_parts if multimodal_parts else prompt
             response = model.generate_content(content_payload)
 
             if not response or not response.text:
@@ -375,6 +403,7 @@ def transform_content(request: TransformRequest) -> TransformResponse:
             "source_character_count": len(source),
             "document_name": request.document_name,
             "image_name": request.image_name,
+            "video_name": request.video_name,
             "model": "gemini-3.6-flash",
             "is_mock": False
         }
