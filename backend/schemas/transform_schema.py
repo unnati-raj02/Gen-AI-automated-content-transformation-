@@ -78,4 +78,101 @@ class TransformResponse(BaseModel):
         default_factory=dict,
         description="Configuration parameters and processing metadata"
     )
+    provenance: Dict[str, Any] = Field(
+        default_factory=dict,
+        description="Structured per-output provenance and traceability records"
+    )
 
+
+class RefineRequest(BaseModel):
+    """
+    Request schema for the /refine endpoint.
+    Allows interactive single-output refinement with a dedicated user instruction.
+    """
+    source_content: str = Field(
+        ...,
+        description="Original source text content"
+    )
+    output_type: str = Field(
+        ...,
+        description="Specific output format to refine (e.g. 'Executive Summary', 'LinkedIn Post')"
+    )
+    current_output: str = Field(
+        ...,
+        description="Current text of the output artefact to be refined"
+    )
+    refinement_instruction: str = Field(
+        ...,
+        description="User instruction directing how the output should be refined"
+    )
+    target_audience: Optional[str] = Field(
+        default=None,
+        description="Target audience (e.g. 'C-suite Executives', 'Engineers')"
+    )
+    tone: Optional[str] = Field(
+        default=None,
+        description="Tone of voice (e.g. 'Professional', 'Urgent', 'Inspiring')"
+    )
+    language: Optional[str] = Field(
+        default="English",
+        description="Language for the refined output (defaults to English)"
+    )
+    detail_level: Optional[str] = Field(
+        default=None,
+        description="Detail level ('Brief', 'Moderate', 'Detailed')"
+    )
+    communication_objective: Optional[str] = Field(
+        default=None,
+        description="Communication objective (e.g. 'Inform', 'Persuade', 'Call to Action')"
+    )
+    content_style: Optional[str] = Field(
+        default=None,
+        description="Content style (e.g. 'Direct & Concise', 'Analytical & Data-Driven')"
+    )
+    document_name: Optional[str] = Field(
+        default=None,
+        description="Optional original document name if content was uploaded as a file"
+    )
+    image_data: Optional[str] = Field(
+        default=None,
+        description="Optional base64-encoded image data or data URI"
+    )
+    image_name: Optional[str] = Field(
+        default=None,
+        description="Optional original filename of attached image"
+    )
+    video_data: Optional[str] = Field(
+        default=None,
+        description="Optional base64-encoded video data or data URI"
+    )
+    video_name: Optional[str] = Field(
+        default=None,
+        description="Optional original filename of attached video"
+    )
+
+
+class RefineResponse(BaseModel):
+    """
+    Response schema for the /refine endpoint.
+    Returns the refined output along with validation, recovery, and provenance metadata.
+    """
+    status: str = Field(
+        ...,
+        description="Status of refinement ('success' or 'error')"
+    )
+    output_type: str = Field(
+        ...,
+        description="The refined output format"
+    )
+    refined_output: str = Field(
+        ...,
+        description="The refined content text"
+    )
+    metadata: Dict[str, Any] = Field(
+        default_factory=dict,
+        description="Refinement metadata: model, is_mock, output_type, refinement_applied, validation, recovery_attempted"
+    )
+    provenance: Dict[str, Any] = Field(
+        default_factory=dict,
+        description="Structured provenance and traceability record for the refined output"
+    )

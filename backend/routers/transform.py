@@ -1,6 +1,6 @@
 from fastapi import APIRouter, UploadFile, File
-from schemas.transform_schema import TransformRequest, TransformResponse
-from services.transform_service import transform_content
+from schemas.transform_schema import TransformRequest, TransformResponse, RefineRequest, RefineResponse
+from services.transform_service import transform_content, refine_output
 from services.document_service import extract_text_from_document
 
 # Initialize APIRouter for transformation endpoints
@@ -17,6 +17,17 @@ def transform(request: TransformRequest):
     return transform_content(request)
 
 
+@router.post("/refine", response_model=RefineResponse, summary="Refine a single generated output")
+def refine(request: RefineRequest):
+    """
+    Stage 3: Interactive Single-Output Refinement.
+    Accepts an existing generated output along with user refinement instructions and context,
+    refines ONLY that specific output format without regenerating other outputs,
+    and returns the validated refined artefact.
+    """
+    return refine_output(request)
+
+
 @router.post("/extract-text", summary="Extract readable text from uploaded document (.txt, .pdf, .docx)")
 async def extract_text(file: UploadFile = File(...)):
     """
@@ -30,4 +41,3 @@ async def extract_text(file: UploadFile = File(...)):
         "extracted_text": extracted_text,
         "character_count": len(extracted_text)
     }
-

@@ -17,6 +17,134 @@ const STYLE_OPTIONS = ['Direct & Concise', 'Analytical & Data-Driven', 'Storytel
 const DETAIL_LEVELS = ['Brief', 'Moderate', 'Detailed'];
 const LANGUAGES = ['English', 'Hindi', 'Spanish', 'French', 'German'];
 
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://127.0.0.1:8000';
+
+const DEMO_PRESETS = [
+  {
+    id: 'cybersecurity',
+    title: '🛡️ CyberShield Incident Pilot',
+    description: 'Zero-trust architecture, 68% threat reduction, 99.4% mitigated, SOC2 Type II audit.',
+    source: `Project CyberShield is an enterprise cybersecurity framework initiated in Q1 2026 to safeguard cloud infrastructure, identify zero-day vulnerabilities, and ensure zero-trust compliance across distributed multi-cloud environments. During internal pilot testing, automated detection reduced threat response times by 68%, mitigating 99.4% of simulated intrusions before lateral movement occurred. Key pillars include real-time anomaly detection, automated policy enforcement, continuous posture management, and seamless CI/CD security scanning. The platform has received SOC2 Type II certification and adheres to ISO/IEC 27001 standards.`,
+    documentName: 'Project_CyberShield_Audit_Q1_2026.pdf',
+    outputTypes: ['Executive Summary', 'Advisory', 'LinkedIn Post', 'Presentation'],
+    audience: 'Enterprise Leadership and Security Teams',
+    tone: 'Professional',
+    objective: 'Inform',
+    style: 'Analytical & Data-Driven',
+    detail: 'Detailed'
+  },
+  {
+    id: 'cloud_financial',
+    title: '📈 Cloud ROI & Efficiency Review',
+    description: 'Consolidation saving $42.5M annually, 3.8x ROI, 99.99% multi-region uptime.',
+    source: `In Q3 2026, the Global Infrastructure Group completed a cloud consolidation initiative across 4 global regions, optimizing 14,000 container instances. The migration delivered $42.5M in annual recurring savings, achieved a 3.8x ROI within 9 months, and maintained 99.99% operational uptime. Carbon footprint and idle compute power consumption were reduced by 31% through automated workload scheduling. Leadership has approved Phase 2 rollout for APAC expansion.`,
+    documentName: 'Cloud_Optimization_Q3_Review.docx',
+    outputTypes: ['Executive Summary', 'Infographic', 'Presentation', 'LinkedIn Post'],
+    audience: 'C-Suite Executives & Financial Stakeholders',
+    tone: 'Inspiring',
+    objective: 'Decision Support',
+    style: 'Direct & Concise',
+    detail: 'Moderate'
+  },
+  {
+    id: 'ai_governance',
+    title: '🤖 Enterprise AI Governance Standard',
+    description: 'Mandatory deployment safeguards, 99.8% PII redaction precision, 15ms latency SLAs.',
+    source: `The 2026 Enterprise GenAI Governance Protocol establishes mandatory deployment safeguards across all internal and customer-facing AI agents. Protocols require automated PII redaction with 99.8% precision, mandatory human-in-the-loop signoff for contract generation, and strict 15ms latency budgets for mission-critical validation pipelines. Non-compliance results in immediate model rollback. All automated reasoning logs must be preserved for 365 days in tamper-evident storage for regulatory auditability.`,
+    documentName: 'Enterprise_AI_Policy_2026.txt',
+    outputTypes: ['Executive Summary', 'Advisory', 'Twitter/X Post', 'Presentation'],
+    audience: 'Engineering & Compliance Teams',
+    tone: 'Professional',
+    objective: 'Educate',
+    style: 'Technical & Precise',
+    detail: 'Brief'
+  }
+];
+
+function parsePresentationSlides(text) {
+  if (!text) return [];
+  const slideRegex = /(?:^|\n)(?:###?\s*)?Slide\s+(\d+)[:\s-]*(.*?)(?=(?:\n(?:###?\s*)?Slide\s+\d+|$))/gis;
+  const matches = [...text.matchAll(slideRegex)];
+  if (matches.length < 2) return [];
+
+  return matches.map((m, idx) => {
+    const slideNum = m[1] || `${idx + 1}`;
+    const rawBody = (m[2] || '').trim();
+    const lines = rawBody.split('\n').map(l => l.trim()).filter(Boolean);
+
+    let title = `Slide ${slideNum}`;
+    const bullets = [];
+    let speakerNotes = '';
+
+    if (lines.length > 0) {
+      let startIdx = 0;
+      const firstLine = lines[0];
+      if (/^slide title:\s*/i.test(firstLine)) {
+        title = firstLine.replace(/^slide title:\s*/i, '').replace(/[*_]/g, '').trim();
+        startIdx = 1;
+      } else if (!firstLine.startsWith('-') && !firstLine.startsWith('•') && !firstLine.startsWith('*') && !/^\d+\./.test(firstLine)) {
+        title = firstLine.replace(/[*_]/g, '').trim();
+        startIdx = 1;
+      }
+
+      for (let i = startIdx; i < lines.length; i++) {
+        const line = lines[i];
+        if (/^(?:speaker )?notes?:\s*/i.test(line)) {
+          speakerNotes = lines.slice(i).join(' ').replace(/^(?:speaker )?notes?:\s*/i, '').replace(/[*_]/g, '').trim();
+          break;
+        } else if (line.startsWith('-') || line.startsWith('•') || line.startsWith('*')) {
+          bullets.push(line.replace(/^[-•*]\s*/, '').replace(/[*_]/g, '').trim());
+        } else if (/^\d+\./.test(line)) {
+          bullets.push(line.replace(/^\d+\.\s*/, '').replace(/[*_]/g, '').trim());
+        } else if (line) {
+          bullets.push(line.replace(/[*_]/g, '').trim());
+        }
+      }
+    }
+
+    return { slideNum, title, bullets, speakerNotes };
+  });
+}
+
+function parseInfographicData(text) {
+  if (!text) return null;
+  const lines = text.split('\n').map(l => l.trim()).filter(Boolean);
+
+  let title = 'Visual Infographic Summary';
+  const titleLine = lines.find(l => /^(?:catchy title|title|headline):/i.test(l));
+  if (titleLine) {
+    title = titleLine.replace(/^(?:catchy title|title|headline):\s*/i, '').replace(/[*_#]/g, '').trim();
+  }
+
+  const statCards = [];
+  const statRegex = /^(?:[-•*]\s*)?([$€£₹]?\d+(?:\.\d+)?%?|\bQ[1-4]\s*20\d\d\b)\s*[:\-–]\s*(.+)$/i;
+
+  for (const line of lines) {
+    const match = line.match(statRegex);
+    if (match) {
+      statCards.push({
+        value: match[1].replace(/[*_]/g, '').trim(),
+        label: match[2].replace(/[*_]/g, '').trim()
+      });
+    }
+  }
+
+  const pillars = [];
+  for (const line of lines) {
+    const pMatch = line.match(/^(?:(?:\d+\.|\bPhase\s*\d+|[-•*])\s*)([A-Za-z0-9\s/_-]{3,35})[:\-–]\s*(.+)$/);
+    if (pMatch && !statCards.some(s => s.label === pMatch[2])) {
+      pillars.push({
+        heading: pMatch[1].replace(/[*_]/g, '').trim(),
+        description: pMatch[2].replace(/[*_]/g, '').trim()
+      });
+    }
+  }
+
+  if (statCards.length === 0 && pillars.length === 0) return null;
+
+  return { title, statCards, pillars };
+}
+
 function App() {
   const [sourceContent, setSourceContent] = useState('');
   const [outputTypes, setOutputTypes] = useState(['Executive Summary']);
@@ -34,17 +162,119 @@ function App() {
   const [imageName, setImageName] = useState(null);
   const [imagePreview, setImagePreview] = useState(null);
   const imageInputRef = useRef(null);
+  const imageAutoPromptRef = useRef(null);
 
   // Video upload state (.mp4, .webm, .mov)
   const [videoName, setVideoName] = useState(null);
   const [videoPreview, setVideoPreview] = useState(null);
   const [videoSize, setVideoSize] = useState(null);
   const videoInputRef = useRef(null);
+  const videoAutoPromptRef = useRef(null);
 
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   const [result, setResult] = useState(null);
   const [copiedType, setCopiedType] = useState(null);
+
+  // Stage 5: Interactive Refinement State
+  const [activeRefineType, setActiveRefineType] = useState(null);
+  const [refiningType, setRefiningType] = useState(null);
+  const [refineInstructions, setRefineInstructions] = useState({});
+  const [refineErrors, setRefineErrors] = useState({});
+
+  // SIH Differentiation: View Modes (visual vs raw) and Slide Deck state
+  const [viewModes, setViewModes] = useState({});
+  const [slideIndices, setSlideIndices] = useState({});
+
+  const toggleViewMode = (type) => {
+    setViewModes((prev) => ({
+      ...prev,
+      [type]: prev[type] === 'raw' ? 'visual' : 'raw'
+    }));
+  };
+
+  const handleNextSlide = (type, totalSlides) => {
+    setSlideIndices((prev) => {
+      const current = prev[type] || 0;
+      return { ...prev, [type]: (current + 1) % totalSlides };
+    });
+  };
+
+  const handlePrevSlide = (type, totalSlides) => {
+    setSlideIndices((prev) => {
+      const current = prev[type] || 0;
+      return { ...prev, [type]: (current - 1 + totalSlides) % totalSlides };
+    });
+  };
+
+  const handleSetSlide = (type, index) => {
+    setSlideIndices((prev) => ({ ...prev, [type]: index }));
+  };
+
+  const handleApplyPreset = (preset) => {
+    setSourceContent(preset.source);
+    setDocumentName(preset.documentName);
+    setOutputTypes(preset.outputTypes);
+    setTargetAudience(preset.audience);
+    setTone(preset.tone);
+    setCommunicationObjective(preset.objective);
+    setContentStyle(preset.style);
+    setDetailLevel(preset.detail);
+    setError(null);
+  };
+
+  const handleDownloadBundle = () => {
+    if (!result?.outputs) return;
+    const lines = [
+      '# AI Content Transformation Deliverables',
+      `Generated: ${new Date().toISOString()}`,
+      `Model: ${result.metadata?.model || 'Gemini'}`,
+      `Document Source: ${result.metadata?.document_name || 'Direct Input'}`,
+      `Audience: ${result.metadata?.target_audience || 'General'} | Tone: ${result.metadata?.tone || 'Professional'}`,
+      `Consolidated Call Architecture: 1 Primary Gemini Call`,
+      '',
+      '---',
+      ''
+    ];
+
+    Object.entries(result.outputs).forEach(([type, content], idx) => {
+      const prov = getOutputProvenance(type);
+      lines.push(`## ${idx + 1}. ${type}`);
+      if (prov?.factual_grounding?.summary) {
+        lines.push(`> Factual Grounding: ${prov.factual_grounding.summary}`);
+      }
+      lines.push('');
+      lines.push(content);
+      lines.push('');
+      lines.push('---');
+      lines.push('');
+    });
+
+    lines.push('## Provenance & Audit Trail');
+    lines.push('```json');
+    lines.push(JSON.stringify(result.provenance || result.metadata?.provenance || {}, null, 2));
+    lines.push('```');
+
+    const blob = new Blob([lines.join('\n')], { type: 'text/markdown;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `content_transformation_deliverables_${new Date().toISOString().slice(0, 10)}.md`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const handleDownloadProvenanceJSON = () => {
+    if (!result) return;
+    const provData = result.provenance || result.metadata?.provenance || {};
+    const blob = new Blob([JSON.stringify(provData, null, 2)], { type: 'application/json;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `provenance_audit_trail_${new Date().toISOString().slice(0, 10)}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
 
   // Toggle selection for multiple output types
   const toggleOutputType = (id) => {
@@ -59,6 +289,131 @@ function App() {
   const getTypeIcon = (typeName) => {
     const matched = OUTPUT_TYPES.find((t) => t.id === typeName || t.label === typeName);
     return matched ? matched.icon : '\u{1F4C4}';
+  };
+
+  // Helper to get structured provenance for an output type
+  const getOutputProvenance = (type) => {
+    if (!result) return null;
+    return result.provenance?.[type] || result.metadata?.provenance?.[type] || null;
+  };
+
+  // Stage 5: Refinement Handlers
+  const handleToggleRefine = (type) => {
+    if (refiningType !== null) return;
+    if (activeRefineType === type) {
+      setActiveRefineType(null);
+    } else {
+      setActiveRefineType(type);
+      setRefineErrors((prev) => ({ ...prev, [type]: null }));
+    }
+  };
+
+  const handleCancelRefine = (type) => {
+    if (refiningType === type) return;
+    setActiveRefineType(null);
+    setRefineErrors((prev) => ({ ...prev, [type]: null }));
+  };
+
+  const handleRefineSubmit = async (type) => {
+    const instruction = (refineInstructions[type] || '').trim();
+    if (!instruction) {
+      setRefineErrors((prev) => ({ ...prev, [type]: 'Please enter a refinement instruction.' }));
+      return;
+    }
+
+    const currentOutput = result?.outputs?.[type];
+    if (!currentOutput) {
+      setRefineErrors((prev) => ({ ...prev, [type]: 'Current output content is missing.' }));
+      return;
+    }
+
+    setRefiningType(type);
+    setRefineErrors((prev) => ({ ...prev, [type]: null }));
+
+    const payload = {
+      source_content: sourceContent.trim() || `[Multimodal Analysis of ${videoName || imageName || 'attached media'}]`,
+      output_type: type,
+      current_output: currentOutput,
+      refinement_instruction: instruction,
+      target_audience: targetAudience.trim() || null,
+      tone: tone || null,
+      communication_objective: communicationObjective || null,
+      content_style: contentStyle || null,
+      language: language || 'English',
+      detail_level: detailLevel || null,
+      document_name: documentName || null,
+      image_data: imagePreview || null,
+      image_name: imageName || null,
+      video_data: videoPreview || null,
+      video_name: videoName || null,
+    };
+
+    try {
+      const response = await fetch(`${API_BASE_URL}/refine`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(payload),
+      });
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.detail || `Refinement failed (${response.status})`);
+      }
+
+      if (data.status !== 'success' || !data.refined_output) {
+        throw new Error(data.detail || 'Refinement did not produce a valid output.');
+      }
+
+      // SELECTIVE UPDATE:
+      // Update ONLY the selected output format. All other outputs remain untouched.
+      setResult((prev) => {
+        if (!prev) return prev;
+        const updatedOutputs = {
+          ...prev.outputs,
+          [type]: data.refined_output,
+        };
+
+        const updatedProvItem = data.provenance || data.metadata?.provenance || {
+          output_type: type,
+          generation_action: 'refined',
+          generation_timestamp: new Date().toISOString(),
+          refinement_applied: instruction,
+          validation: data.metadata?.validation,
+        };
+
+        const currentProv = prev.provenance || prev.metadata?.provenance || {};
+        const updatedProvenance = {
+          ...currentProv,
+          [type]: updatedProvItem,
+        };
+
+        return {
+          ...prev,
+          outputs: updatedOutputs,
+          provenance: updatedProvenance,
+          metadata: {
+            ...prev.metadata,
+            provenance: updatedProvenance,
+          },
+        };
+      });
+
+      // Close refinement panel and clear instruction on success
+      setActiveRefineType(null);
+      setRefineInstructions((prev) => ({ ...prev, [type]: '' }));
+    } catch (err) {
+      console.error('Refinement error:', err);
+      // Preserve previous output; only set inline error
+      setRefineErrors((prev) => ({
+        ...prev,
+        [type]: err.message || 'Failed to refine output. Original content was preserved.',
+      }));
+    } finally {
+      setRefiningType(null);
+    }
   };
 
   // Document upload handler (.txt, .pdf, .docx support)
@@ -79,7 +434,7 @@ function App() {
     formData.append('file', file);
 
     try {
-      const response = await fetch('http://127.0.0.1:8000/extract-text', {
+      const response = await fetch(`${API_BASE_URL}/extract-text`, {
         method: 'POST',
         body: formData,
       });
@@ -124,7 +479,9 @@ function App() {
       setImagePreview(reader.result);
       setImageName(file.name);
       if (!sourceContent.trim()) {
-        setSourceContent(`[Visual Source: ${file.name}]\nPlease analyze and transform the visual diagrams, statistics, and information in this attached image.`);
+        const autoPrompt = `[Visual Source: ${file.name}]\nPlease analyze and transform the visual diagrams, statistics, and information in this attached image.`;
+        setSourceContent(autoPrompt);
+        imageAutoPromptRef.current = autoPrompt;
       }
     };
     reader.onerror = () => {
@@ -139,6 +496,11 @@ function App() {
     if (imageInputRef.current) {
       imageInputRef.current.value = '';
     }
+    // Only remove prompt if it matches the auto-generated prompt (i.e. user didn't modify it)
+    if (imageAutoPromptRef.current && sourceContent === imageAutoPromptRef.current) {
+      setSourceContent('');
+    }
+    imageAutoPromptRef.current = null;
   };
 
   // Video upload handler (.mp4, .webm, .mov)
@@ -169,7 +531,9 @@ function App() {
       setVideoName(file.name);
       setVideoSize(sizeStr);
       if (!sourceContent.trim()) {
-        setSourceContent(`[Video Source: ${file.name}]\nPlease analyze and transform the visual scenes, demonstrations, dialogue, and key topics from this attached video.`);
+        const autoPrompt = `[Video Source: ${file.name}]\nPlease analyze and transform the visual scenes, demonstrations, dialogue, and key topics from this attached video.`;
+        setSourceContent(autoPrompt);
+        videoAutoPromptRef.current = autoPrompt;
       }
     };
     reader.onerror = () => {
@@ -185,6 +549,11 @@ function App() {
     if (videoInputRef.current) {
       videoInputRef.current.value = '';
     }
+    // Only remove prompt if it matches the auto-generated prompt (i.e. user didn't modify it)
+    if (videoAutoPromptRef.current && sourceContent === videoAutoPromptRef.current) {
+      setSourceContent('');
+    }
+    videoAutoPromptRef.current = null;
   };
 
   const handleTransform = async (e) => {
@@ -202,6 +571,9 @@ function App() {
 
     setLoading(true);
     setError(null);
+    setActiveRefineType(null);
+    setRefiningType(null);
+    setRefineErrors({});
 
     const payload = {
       source_content: sourceContent.trim() || `[Multimodal Analysis of ${videoName || imageName || 'attached media'}]`,
@@ -220,7 +592,7 @@ function App() {
     };
 
     try {
-      const response = await fetch('http://127.0.0.1:8000/transform', {
+      const response = await fetch(`${API_BASE_URL}/transform`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -243,25 +615,65 @@ function App() {
     }
   };
 
+  // Robust clipboard copy with modern API and textarea fallback
+  const copyToClipboard = async (text) => {
+    if (!text) return false;
+
+    if (navigator.clipboard && window.isSecureContext) {
+      try {
+        await navigator.clipboard.writeText(text);
+        return true;
+      } catch (err) {
+        console.warn('navigator.clipboard write failed, using fallback:', err);
+      }
+    }
+
+    try {
+      const textArea = document.createElement('textarea');
+      textArea.value = text;
+      textArea.style.position = 'fixed';
+      textArea.style.left = '-9999px';
+      textArea.style.top = '-9999px';
+      textArea.setAttribute('readonly', '');
+      document.body.appendChild(textArea);
+      textArea.select();
+      const successful = document.execCommand('copy');
+      document.body.removeChild(textArea);
+      return successful;
+    } catch (fallbackErr) {
+      console.error('Clipboard copy failed:', fallbackErr);
+      return false;
+    }
+  };
+
   // Copy individual output content
-  const handleCopy = (text, typeKey) => {
-    if (text) {
-      navigator.clipboard.writeText(text);
+  const handleCopy = async (text, typeKey) => {
+    const success = await copyToClipboard(text);
+    if (success) {
       setCopiedType(typeKey);
       setTimeout(() => setCopiedType(null), 2000);
     }
   };
 
   // Copy all generated outputs combined
-  const handleCopyAll = () => {
+  const handleCopyAll = async () => {
     if (result && result.outputs) {
       const allText = Object.entries(result.outputs)
         .map(([type, text]) => `=== ${type.toUpperCase()} ===\n\n${text}`)
         .join('\n\n---\n\n');
-      navigator.clipboard.writeText(allText);
-      setCopiedType('all');
-      setTimeout(() => setCopiedType(null), 2000);
+      const success = await copyToClipboard(allText);
+      if (success) {
+        setCopiedType('all');
+        setTimeout(() => setCopiedType(null), 2000);
+      }
     }
+  };
+
+  // Clear source text only (preserves attached document/image/video badges)
+  const handleClearText = () => {
+    setSourceContent('');
+    imageAutoPromptRef.current = null;
+    videoAutoPromptRef.current = null;
   };
 
   const hasOutputs = result && result.outputs && Object.keys(result.outputs).length > 0;
@@ -284,13 +696,47 @@ function App() {
         <section className="card">
           <h2 className="card-title">1. Source & Configuration</h2>
 
+          {/* 1-Click Enterprise Demo Presets */}
+          <div className="demo-presets-container">
+            <div className="demo-presets-label">
+              <span>⚡ Enterprise Demo Presets:</span>
+            </div>
+            <div className="demo-presets-buttons">
+              {DEMO_PRESETS.map((preset) => (
+                <button
+                  key={preset.id}
+                  type="button"
+                  className="btn-preset"
+                  onClick={() => handleApplyPreset(preset)}
+                  disabled={loading || extracting || refiningType !== null}
+                  title={preset.description}
+                >
+                  <span>{preset.title}</span>
+                </button>
+              ))}
+            </div>
+          </div>
+
           <form onSubmit={handleTransform}>
             {/* Source Content & Document / Image Upload */}
             <div className="form-group">
               <div className="source-label-row">
                 <label htmlFor="source-content" className="form-label" style={{ marginBottom: 0 }}>
                   <span>Source Content *</span>
-                  <span className="char-counter">{sourceContent.length} characters</span>
+                  <span className="char-counter">
+                    {sourceContent.length} characters
+                    {sourceContent.length > 0 && (
+                      <button
+                        type="button"
+                        className="btn-clear-text"
+                        onClick={handleClearText}
+                        disabled={loading || extracting}
+                        title="Clear source text only"
+                      >
+                        Clear
+                      </button>
+                    )}
+                  </span>
                 </label>
                 <div className="upload-buttons-group">
                   <div className="doc-upload-wrapper">
@@ -557,7 +1003,7 @@ function App() {
             <button
               type="submit"
               className="btn-primary"
-              disabled={loading || extracting || (!sourceContent.trim() && !imagePreview && !videoPreview) || outputTypes.length === 0}
+              disabled={loading || extracting || refiningType !== null || (!sourceContent.trim() && !imagePreview && !videoPreview) || outputTypes.length === 0}
             >
               {loading ? (
                 <>
@@ -580,14 +1026,34 @@ function App() {
               2. Generated Artefacts
             </h2>
 
-            {hasOutputs && Object.keys(result.outputs).length > 1 && (
-              <button
-                type="button"
-                className={`btn-copy ${copiedType === 'all' ? 'copied' : ''}`}
-                onClick={handleCopyAll}
-              >
-                {copiedType === 'all' ? '\u{2713} All Copied!' : '\u{1F4CB} Copy All'}
-              </button>
+            {hasOutputs && (
+              <div className="export-actions-group">
+                <button
+                  type="button"
+                  className="btn-export-bundle"
+                  onClick={handleDownloadBundle}
+                  title="Download all deliverables formatted as a complete Markdown bundle"
+                >
+                  📥 Export Bundle (.md)
+                </button>
+                <button
+                  type="button"
+                  className="btn-export-json"
+                  onClick={handleDownloadProvenanceJSON}
+                  title="Download machine-readable provenance and audit trail"
+                >
+                  🛡️ Audit JSON
+                </button>
+                {Object.keys(result.outputs).length > 1 && (
+                  <button
+                    type="button"
+                    className={`btn-copy ${copiedType === 'all' ? 'copied' : ''}`}
+                    onClick={handleCopyAll}
+                  >
+                    {copiedType === 'all' ? '\u{2713} All Copied!' : '\u{1F4CB} Copy All'}
+                  </button>
+                )}
+              </div>
             )}
           </div>
 
@@ -605,26 +1071,341 @@ function App() {
           {hasOutputs ? (
             <div>
               <div className="outputs-list">
-                {Object.entries(result.outputs).map(([type, content]) => (
-                  <div key={type} className="output-card">
-                    <div className="output-card-header">
-                      <div className="output-card-title">
-                        <span className="output-type-icon">{getTypeIcon(type)}</span>
-                        <span>{type}</span>
+                {Object.entries(result.outputs).map(([type, content]) => {
+                  const outputProv = getOutputProvenance(type);
+                  const isRefiningThis = refiningType === type;
+                  const isRefineOpen = activeRefineType === type;
+
+                  return (
+                    <div key={type} className={`output-card ${isRefiningThis ? 'card-refining' : ''}`}>
+                      <div className="output-card-header">
+                        <div className="output-card-title-group">
+                          <div className="output-card-title">
+                            <span className="output-type-icon">{getTypeIcon(type)}</span>
+                            <span>{type}</span>
+                          </div>
+                          <div className="output-badges-group">
+                            {outputProv?.factual_grounding?.is_grounded && outputProv?.factual_grounding?.verified_count > 0 && (
+                              <span
+                                className="badge-provenance badge-grounded"
+                                title={outputProv.factual_grounding.summary || 'Factual grounding verified'}
+                              >
+                                🛡️ {outputProv.factual_grounding.verified_count}/{outputProv.factual_grounding.total_source_facts || outputProv.factual_grounding.verified_count} Grounded
+                              </span>
+                            )}
+                            {outputProv?.factual_grounding && !outputProv.factual_grounding.is_grounded && (
+                              <span
+                                className="badge-provenance badge-ungrounded"
+                                title={outputProv.factual_grounding.summary || 'Ungrounded content detected'}
+                              >
+                                🚫 Ungrounded
+                              </span>
+                            )}
+                            {!outputProv?.factual_grounding?.is_grounded && outputProv?.factual_grounding?.unverified_metrics?.length > 0 && (
+                              <span
+                                className="badge-provenance badge-unverified"
+                                title={`Unverified metrics: ${outputProv.factual_grounding.unverified_metrics.join(', ')}`}
+                              >
+                                ⚠️ {outputProv.factual_grounding.unverified_metrics.length} Unverified Metric ({outputProv.factual_grounding.unverified_metrics.join(', ')})
+                              </span>
+                            )}
+                            {!outputProv?.factual_grounding?.is_grounded && outputProv?.factual_grounding?.unsupported_events?.length > 0 && (
+                              <span
+                                className="badge-provenance badge-unverified"
+                                title={`Unsupported events: ${outputProv.factual_grounding.unsupported_events.join(', ')}`}
+                              >
+                                ⚠️ Unsupported Event: {outputProv.factual_grounding.unsupported_events.join(', ')}
+                              </span>
+                            )}
+                            {!outputProv?.factual_grounding?.is_grounded && outputProv?.factual_grounding?.unsupported_entities?.length > 0 && (
+                              <span
+                                className="badge-provenance badge-unverified"
+                                title={`Unsupported entities: ${outputProv.factual_grounding.unsupported_entities.join(', ')}`}
+                              >
+                                ⚠️ Unsupported Entity: {outputProv.factual_grounding.unsupported_entities.join(', ')}
+                              </span>
+                            )}
+                            {(outputProv?.generation_action === 'recovered' || outputProv?.recovery_attempted) && (
+                              <span
+                                className="badge-provenance badge-recovered"
+                                title="Recovered via targeted recovery"
+                              >
+                                🔄 Self-Healed
+                              </span>
+                            )}
+                            {(outputProv?.generation_action === 'refined' || outputProv?.refinement_applied) && (
+                              <span
+                                className="badge-provenance badge-refined"
+                                title={`Refined: "${outputProv.refinement_applied || ''}"`}
+                              >
+                                ✨ Refined
+                              </span>
+                            )}
+                            {(outputProv?.validation?.valid ?? outputProv?.validation?.is_valid) ? (
+                              <span
+                                className="badge-provenance badge-valid"
+                                title="Quality validation passed"
+                              >
+                                ✓ Validated
+                              </span>
+                            ) : outputProv?.validation?.severity === 'warning' ? (
+                              <span
+                                className="badge-provenance badge-warning"
+                                title={`Notice: ${outputProv.validation?.issues?.join(', ') || 'Validation warning'}`}
+                              >
+                                ⚠️ Notice
+                              </span>
+                            ) : null}
+                          </div>
+                        </div>
+
+                        <div className="output-card-actions">
+                          <button
+                            type="button"
+                            className={`btn-refine ${isRefineOpen ? 'active' : ''}`}
+                            onClick={() => handleToggleRefine(type)}
+                            disabled={refiningType !== null || loading}
+                            title="Refine this output with AI"
+                          >
+                            ✨ Refine
+                          </button>
+                          <button
+                            type="button"
+                            className={`btn-copy ${copiedType === type ? 'copied' : ''}`}
+                            onClick={() => handleCopy(content, type)}
+                            disabled={isRefiningThis}
+                          >
+                            {copiedType === type ? '✓ Copied!' : '📋 Copy'}
+                          </button>
+                        </div>
                       </div>
-                      <button
-                        type="button"
-                        className={`btn-copy ${copiedType === type ? 'copied' : ''}`}
-                        onClick={() => handleCopy(content, type)}
-                      >
-                        {copiedType === type ? '\u{2713} Copied!' : '\u{1F4CB} Copy'}
-                      </button>
+
+                      {/* Interactive Refinement Panel */}
+                      {isRefineOpen && (
+                        <div className="refine-panel">
+                          <div className="refine-panel-header">
+                            <span className="refine-panel-title">✨ Refine {type} with AI</span>
+                            <span className="refine-hint">Instruct Gemini to adjust tone, length, structure, or focus</span>
+                          </div>
+                          <textarea
+                            className="refine-textarea"
+                            placeholder={`e.g. Make this ${type.toLowerCase()} more concise and professional, highlight key data, or adapt for a non-technical audience...`}
+                            value={refineInstructions[type] || ''}
+                            onChange={(e) => {
+                              const val = e.target.value;
+                              setRefineInstructions((prev) => ({ ...prev, [type]: val }));
+                              if (refineErrors[type]) {
+                                setRefineErrors((prev) => ({ ...prev, [type]: null }));
+                              }
+                            }}
+                            disabled={isRefiningThis}
+                            rows={3}
+                            autoFocus
+                          />
+                          {refineErrors[type] && (
+                            <div className="refine-error-inline">
+                              <span className="error-icon">⚠️</span>
+                              <span>{refineErrors[type]}</span>
+                            </div>
+                          )}
+                          <div className="refine-actions-row">
+                            <button
+                              type="button"
+                              className="btn-refine-cancel"
+                              onClick={() => handleCancelRefine(type)}
+                              disabled={isRefiningThis}
+                            >
+                              Cancel
+                            </button>
+                            <button
+                              type="button"
+                              className="btn-refine-submit"
+                              onClick={() => handleRefineSubmit(type)}
+                              disabled={isRefiningThis || !(refineInstructions[type] || '').trim()}
+                            >
+                              {isRefiningThis ? (
+                                <>
+                                  <span className="spinner-sm"></span>
+                                  <span>Refining...</span>
+                                </>
+                              ) : (
+                                <span>Apply Refinement</span>
+                              )}
+                            </button>
+                          </div>
+                        </div>
+                      )}
+
+                      <div className="result-content output-content">
+                        {isRefiningThis && (
+                          <div className="refine-loading-banner">
+                            <span className="spinner-sm"></span>
+                            <span>Refining {type} with AI...</span>
+                          </div>
+                        )}
+                        {/* Presentation Slide Deck Interactive View */}
+                        {type === 'Presentation' && (() => {
+                          const slides = parsePresentationSlides(content);
+                          if (slides.length < 2) return null;
+                          const isVisual = viewModes[type] !== 'raw';
+                          const currentIndex = slideIndices[type] || 0;
+                          const activeSlide = slides[currentIndex] || slides[0];
+
+                          return (
+                            <div style={{ marginBottom: '0.75rem' }}>
+                              <div className="view-mode-bar">
+                                <span className="view-mode-title">📊 Slide Deck View ({slides.length} Slides)</span>
+                                <div className="view-mode-toggle">
+                                  <button
+                                    type="button"
+                                    className={`btn-toggle-view ${isVisual ? 'active' : ''}`}
+                                    onClick={() => toggleViewMode(type)}
+                                  >
+                                    Slide Deck
+                                  </button>
+                                  <button
+                                    type="button"
+                                    className={`btn-toggle-view ${!isVisual ? 'active' : ''}`}
+                                    onClick={() => toggleViewMode(type)}
+                                  >
+                                    Raw Text
+                                  </button>
+                                </div>
+                              </div>
+
+                              {isVisual && (
+                                <div className="slide-deck-container">
+                                  <div className="slide-card">
+                                    <div className="slide-card-header">
+                                      <span className="slide-index-badge">Slide {currentIndex + 1} of {slides.length}</span>
+                                    </div>
+                                    <div className="slide-title">{activeSlide.title}</div>
+                                    {activeSlide.bullets.length > 0 && (
+                                      <ul className="slide-bullets">
+                                        {activeSlide.bullets.map((b, bIdx) => (
+                                          <li key={bIdx} className="slide-bullet-item">
+                                            <span className="slide-bullet-icon">▸</span>
+                                            <span>{b}</span>
+                                          </li>
+                                        ))}
+                                      </ul>
+                                    )}
+                                    {activeSlide.speakerNotes && (
+                                      <div className="slide-notes-drawer">
+                                        <span className="slide-notes-label">🎙️ Speaker Notes</span>
+                                        <span>{activeSlide.speakerNotes}</span>
+                                      </div>
+                                    )}
+                                  </div>
+                                  <div className="slide-nav-bar">
+                                    <button
+                                      type="button"
+                                      className="btn-slide-nav"
+                                      onClick={() => handlePrevSlide(type, slides.length)}
+                                      disabled={slides.length <= 1}
+                                    >
+                                      ◀ Previous
+                                    </button>
+                                    <div className="slide-dots">
+                                      {slides.map((_, sIdx) => (
+                                        <span
+                                          key={sIdx}
+                                          className={`slide-dot ${sIdx === currentIndex ? 'active' : ''}`}
+                                          onClick={() => handleSetSlide(type, sIdx)}
+                                          title={`Slide ${sIdx + 1}`}
+                                        />
+                                      ))}
+                                    </div>
+                                    <button
+                                      type="button"
+                                      className="btn-slide-nav"
+                                      onClick={() => handleNextSlide(type, slides.length)}
+                                      disabled={slides.length <= 1}
+                                    >
+                                      Next ▶
+                                    </button>
+                                  </div>
+                                </div>
+                              )}
+                            </div>
+                          );
+                        })()}
+
+                        {/* Infographic Visual Dashboard View */}
+                        {type === 'Infographic' && (() => {
+                          const infoData = parseInfographicData(content);
+                          if (!infoData) return null;
+                          const isVisual = viewModes[type] !== 'raw';
+
+                          return (
+                            <div style={{ marginBottom: '0.75rem' }}>
+                              <div className="view-mode-bar">
+                                <span className="view-mode-title">📈 Metric Dashboard View</span>
+                                <div className="view-mode-toggle">
+                                  <button
+                                    type="button"
+                                    className={`btn-toggle-view ${isVisual ? 'active' : ''}`}
+                                    onClick={() => toggleViewMode(type)}
+                                  >
+                                    Dashboard
+                                  </button>
+                                  <button
+                                    type="button"
+                                    className={`btn-toggle-view ${!isVisual ? 'active' : ''}`}
+                                    onClick={() => toggleViewMode(type)}
+                                  >
+                                    Raw Text
+                                  </button>
+                                </div>
+                              </div>
+
+                              {isVisual && (
+                                <div className="infographic-dashboard">
+                                  <div className="infographic-title-banner">
+                                    <span>📊</span>
+                                    <span>{infoData.title}</span>
+                                  </div>
+
+                                  {infoData.statCards.length > 0 && (
+                                    <div className="infographic-stats-grid">
+                                      {infoData.statCards.map((stat, sIdx) => (
+                                        <div key={sIdx} className="stat-card">
+                                          <div className="stat-value">{stat.value}</div>
+                                          <div className="stat-label">{stat.label}</div>
+                                        </div>
+                                      ))}
+                                    </div>
+                                  )}
+
+                                  {infoData.pillars.length > 0 && (
+                                    <div className="infographic-pillars-grid">
+                                      {infoData.pillars.map((pillar, pIdx) => (
+                                        <div key={pIdx} className="pillar-card">
+                                          <div className="pillar-heading">
+                                            <span>📌</span>
+                                            <span>{pillar.heading}</span>
+                                          </div>
+                                          <div className="pillar-desc">{pillar.description}</div>
+                                        </div>
+                                      ))}
+                                    </div>
+                                  )}
+                                </div>
+                              )}
+                            </div>
+                          );
+                        })()}
+
+                        {/* Standard Raw Text Rendering for Non-Visual or when Raw view selected */}
+                        {((type !== 'Presentation' && type !== 'Infographic') ||
+                          (type === 'Presentation' && (viewModes[type] === 'raw' || parsePresentationSlides(content).length < 2)) ||
+                          (type === 'Infographic' && (viewModes[type] === 'raw' || !parseInfographicData(content)))) && (
+                          <div style={{ whiteSpace: 'pre-wrap' }}>{content}</div>
+                        )}
+                      </div>
                     </div>
-                    <div className="result-content output-content">
-                      {content}
-                    </div>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
 
               {/* Metadata Chips */}
@@ -680,6 +1461,11 @@ function App() {
                 {result.metadata?.is_mock !== undefined && (
                   <span className="metadata-chip">
                     Mode: <strong>{result.metadata.is_mock ? 'Mock' : 'Real AI'}</strong>
+                  </span>
+                )}
+                {result.provenance && Object.values(result.provenance).some((p) => p.generation_action === 'refined' || p.refinement_applied) && (
+                  <span className="metadata-chip" style={{ borderColor: 'rgba(99, 102, 241, 0.4)', color: '#c7d2fe' }}>
+                    Refinement: <strong>Active</strong>
                   </span>
                 )}
               </div>
