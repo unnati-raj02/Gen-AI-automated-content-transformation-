@@ -112,16 +112,17 @@ INSTRUCTIONS:
 4. Align the narrative structure, messaging emphasis, and presentation flow with the Communication Objective ('{communication_objective or 'Inform'}') and Content Style ('{content_style or 'Direct & Concise'}').
 5. Output the result in the '{language}' language.
 6. Provide content matching the '{detail_level}' level of detail according to the format structure:
-   - If Executive Summary: Include overview, strategic impact, and key takeaways/action items.
-   - If Advisory: Include context, risk/operational impact, and clear directives.
-   - If LinkedIn Post: Include a strong hook, concise bullet points, a call-to-action, and relevant hashtags.
-   - If Twitter/X Post: Provide a concise, platform-optimized post or short threaded sequence (keep each segment punchy, under 280 characters, with high-impact opening hook, clear takeaways, and relevant hashtags).
-   - If Infographic: Provide a complete visual blueprint with Catchy Title, Core Key Message, 3-5 Key Points/Statistics, Sectional Narrative Flow, and Layout & Visual Recommendations (suggested icons, chart ideas, and color/design hierarchy).
-   - If Presentation: Provide a slide-by-slide structure with 4-6 slides (e.g. Title/Agenda, Context/Problem, Key Solution/Findings, Strategic Impact, and Next Steps). For every slide, clearly provide: Slide Title, 3-4 concise Bullet Points, and Speaker Notes.
-   - If Video Package: Provide a complete production package including Video Objective & Target Duration (e.g., 60-90s), Full Voiceover Script, Scene-by-Scene Storyboard breakdown (Scene number, Visual Description/Action, On-Screen Text / Subtitles, and Narration), and Production Recommendations (music mood, pacing, and visual style).
+   - If Executive Summary: Include overview, key findings & pillars, and key takeaways/action items. Maintain strict factual grounding in the source content: paraphrase and synthesize source facts faithfully without introducing new causal relationships, speculative outcomes, unstated benefits, or qualitative conclusions. Avoid unsupported phrases such as 'directly enhancing operational efficiency', 'improving incident containment', 'exceptional efficacy', 'complex threat vectors', 'safeguarding enterprise assets', or 'substantial operational and defensive gains'. State measured results faithfully without inventing unstated effects (e.g., 'Internal pilot testing showed a 68% reduction in threat response times through automated detection mechanisms').
+   - If Advisory: Include context, risk/operational impact, and clear directives. Strict grounding rules: Context, risks, and operational impact must be derived exclusively from explicit source facts; do not invent unstated threat vectors, severity ratings, affected systems, or compliance penalties. Directives must address only risks identified in the source without fabricating external deadlines, corporate actions, or unstated mandates.
+   - If LinkedIn Post: Include a strong hook, concise body/bullet points, a call-to-action (CTA), and relevant hashtags. Strict grounding rules: The opening hook must be derived solely from explicit source facts (e.g. key metric or event); do NOT open with broad ungrounded assertions or inferred themes (e.g., 'Optimizing institutional operations through digital transformation yields measurable returns'). Do NOT convert source metrics into unstated broader claims (e.g., a 40% time decrease must not be called 'improved operational efficiency' or 'streamlined operations' unless explicitly stated in the source). Body and CTA must strictly preserve source facts without inventing benefits. Hashtags must be based solely on concepts, entities, and terminology explicitly mentioned in the source (do NOT generate inferred hashtags like #OperationalEfficiency, #DigitalTransformation, or #HigherEducation when not in the source). Professional style must not override factual grounding.
+   - If Twitter/X Post: Provide a concise, platform-optimized post or short threaded sequence (keep each segment punchy, under 280 characters, with high-impact opening hook, clear takeaways, and relevant hashtags). Strict grounding rules: Opening hook, takeaways, and metrics must be grounded exclusively in explicit source facts; do not exaggerate findings into broad ungrounded claims or invent round numbers. Hashtags must reflect only explicit concepts and entities from the source (no generic or inferred industry hashtags).
+   - If Infographic: Provide a complete visual blueprint with Catchy Title, Core Key Message, Key Points/Statistics, Sectional Narrative Flow, and Layout & Visual Recommendations (suggested icons, chart ideas, and color/design hierarchy). Strict grounding rules: Include only metrics, numbers, and data points that are explicitly present in the source; if the source contains few numerical metrics, use qualitative source facts rather than fabricating statistics or comparison benchmarks. Visual chart ideas and callouts must accurately represent only verified source relationships.
+   - If Presentation: Provide a slide-by-slide structure with 4-6 slides (e.g. Title/Agenda, Context/Problem, Key Solution/Findings, Strategic Impact, and Next Steps). For every slide, clearly provide: Slide Title, 3-4 concise Bullet Points, and Speaker Notes. Strict grounding rules: All bullet points and speaker notes must be strictly grounded in source content. Strategic impact must cite only verified outcomes and measured results from the source, without projecting unstated ROI, financial savings, or market benefits. Next steps must not fabricate unstated calendar milestones, partnerships, or corporate events.
+   - If Video Package: Provide a complete production package including Video Objective & Target Duration (e.g., 60-90s), Full Voiceover Script, Scene-by-Scene Storyboard breakdown (Scene number, Visual Description/Action, On-Screen Text / Subtitles, and Narration), and Production Recommendations (music mood, pacing, and visual style). Strict grounding rules: Voiceover narration and on-screen text (chyrons) must state only facts and metrics explicitly verified in the source. Visual action descriptions must illustrate source concepts without inventing unstated client organizations, customer quotes, or fabricated case studies. Do not introduce exaggerated narrative drama or speculative causal claims.
 7. If an attached image is provided, thoroughly examine and interpret its visual components (diagrams, flowcharts, data graphs, illustrations, or embedded text) and integrate those insights directly into the output.
 8. If an attached video is provided, thoroughly examine and interpret its visual scenes, motion progression, on-screen text/chyrons, demonstrations, and spoken audio track, integrating those insights directly into the output.
 9. Do NOT include conversational filler, introductory remarks, or meta-commentary (e.g., do not say "Here is your summary"). Directly output the transformed artefact.
+10. STRICT FACTUAL GROUNDING & CAUSAL INTEGRITY: Every factual statement, metric, entity, event, hook, and hashtag must be strictly grounded in the source content. You may paraphrase and synthesize facts, but you must NOT introduce new causal relationships, outcomes, benefits, or qualitative conclusions that are not supported by the source. Avoid unsubstantiated qualitative claims or unsupported phrases (e.g., 'directly enhancing operational efficiency', 'improving incident containment', 'exceptional efficacy', 'complex threat vectors', 'safeguarding enterprise assets', or 'substantial operational and defensive gains'). For social media formats (such as LinkedIn and Twitter/X), opening hooks and closing CTAs must be anchored exclusively in source facts rather than invented marketing claims, and hashtags must be restricted to terms and concepts explicitly present in the source (never infer broader thematic hashtags like #OperationalEfficiency when not in the source).
 """
 
 
@@ -131,31 +132,63 @@ INSTRUCTIONS:
 
 OUTPUT_FORMAT_SPECIFICATIONS: Dict[str, str] = {
     "executive summary": (
-        "Executive Summary: Include overview, strategic impact, and key takeaways/action items."
+        "Executive Summary: Include executive overview, key findings & architecture/pillars, and action items/takeaways. "
+        "CRITICAL GROUNDING RULES: All factual claims, metrics, and relationships must be strictly grounded in the source content. "
+        "You may paraphrase and synthesize source facts, but you must NOT introduce new causal relationships, outcomes, benefits, "
+        "or qualitative conclusions that are not supported by the source. For example, instead of asserting that an outcome 'directly enhanced "
+        "operational efficiency and incident containment', generate a source-faithful statement such as 'Internal pilot testing showed a 68% "
+        "reduction in threat response times through automated detection mechanisms'. Do NOT use unsupported phrases or unstated qualitative "
+        "conclusions such as 'directly enhancing operational efficiency', 'improving incident containment', 'exceptional efficacy', "
+        "'complex threat vectors', 'safeguarding enterprise assets', or 'substantial operational and defensive gains' unless the source "
+        "explicitly supports them. State measured results and facts faithfully without embellishment."
     ),
     "advisory": (
-        "Advisory: Include context, risk/operational impact, and clear directives."
+        "Advisory: Include context, risk/operational impact, and clear directives. "
+        "Strict grounding rules: Context, risks, and operational impact must be derived exclusively from explicit source facts. "
+        "Do not invent unstated threat vectors, severity ratings, affected systems, or compliance penalties. "
+        "Directives must address only risks identified in the source without fabricating external deadlines, corporate actions, or unstated mandates."
     ),
     "linkedin post": (
-        "LinkedIn Post: Include a strong hook, concise bullet points, a call-to-action, and relevant hashtags."
+        "LinkedIn Post: Include a strong hook, concise body/bullet points, a call-to-action (CTA), and relevant hashtags. "
+        "CRITICAL GROUNDING RULES: "
+        "1. Hook: The opening hook must be derived ONLY from facts explicitly present in the source content (e.g., direct data point, metric, or event). "
+        "Do NOT open with broader thematic assertions, speculative benefits, or unstated business/operational claims (e.g., do NOT say 'Optimizing institutional operations through digital transformation yields measurable returns'). "
+        "2. Factual Integrity: Do NOT convert source metrics into unstated broader claims. For example, 'attendance processing time decreased by 40%' must NOT become 'improved operational efficiency' or 'streamlined operations' unless the source explicitly states that. "
+        "3. Body: Preserve source-supported facts and metrics faithfully without inventing unstated capabilities, organizations, industries, or outcomes. "
+        "4. Call to Action (CTA): The closing CTA or discussion prompt must remain neutral and must NOT assert ungrounded factual claims, outcomes, or benefits. "
+        "5. Hashtags: Hashtags must be based ONLY on concepts, entities, and terminology explicitly present in the source (e.g., #DigitalAttendance, #StudentAttendance, #AttendanceRecords). "
+        "Do NOT generate broader inferred hashtags (e.g., #OperationalEfficiency, #DigitalTransformation, #EdTech, #AcademicAdministration) not explicitly in the source. "
+        "6. Tone & Style: Professional or persuasive style must NEVER override factual grounding. Persuasion must come strictly from the source facts rather than invented claims."
     ),
     "twitter/x post": (
         "Twitter/X Post: Provide a concise, platform-optimized post or short threaded sequence "
-        "(keep each segment punchy, under 280 characters, with high-impact opening hook, clear takeaways, and relevant hashtags)."
+        "(keep each segment punchy, under 280 characters, with high-impact opening hook, clear takeaways, and relevant hashtags). "
+        "Strict grounding rules: Opening hook, takeaways, and metrics must be grounded exclusively in explicit source facts. "
+        "Do not exaggerate findings into broad ungrounded claims or invent round numbers. "
+        "Hashtags must reflect only explicit concepts and entities from the source (no generic or inferred industry hashtags)."
     ),
     "infographic": (
-        "Infographic: Provide a complete visual blueprint with Catchy Title, Core Key Message, 3-5 Key Points/Statistics, "
-        "Sectional Narrative Flow, and Layout & Visual Recommendations (suggested icons, chart ideas, and color/design hierarchy)."
+        "Infographic: Provide a complete visual blueprint with Catchy Title, Core Key Message, Key Points/Statistics, "
+        "Sectional Narrative Flow, and Layout & Visual Recommendations (suggested icons, chart ideas, and color/design hierarchy). "
+        "Strict grounding rules: Include only metrics, numbers, and data points that are explicitly present in the source; "
+        "if the source contains few numerical metrics, use qualitative source facts rather than fabricating statistics or comparison benchmarks. "
+        "Visual chart ideas and callouts must accurately represent only verified source relationships."
     ),
     "presentation": (
         "Presentation: Provide a slide-by-slide structure with 4-6 slides (e.g. Title/Agenda, Context/Problem, "
         "Key Solution/Findings, Strategic Impact, and Next Steps). For every slide, clearly provide: Slide Title, "
-        "3-4 concise Bullet Points, and Speaker Notes."
+        "3-4 concise Bullet Points, and Speaker Notes. "
+        "Strict grounding rules: All bullet points and speaker notes must be strictly grounded in source content. "
+        "Strategic impact must cite only verified outcomes and measured results from the source, without projecting unstated ROI, "
+        "financial savings, or market benefits. Next steps must not fabricate unstated calendar milestones, partnerships, or corporate events."
     ),
     "video package": (
         "Video Package: Provide a complete production package including Video Objective & Target Duration (e.g., 60-90s), "
         "Full Voiceover Script, Scene-by-Scene Storyboard breakdown (Scene number, Visual Description/Action, "
-        "On-Screen Text / Subtitles, and Narration), and Production Recommendations (music mood, pacing, and visual style)."
+        "On-Screen Text / Subtitles, and Narration), and Production Recommendations (music mood, pacing, and visual style). "
+        "Strict grounding rules: Voiceover narration and on-screen text (chyrons) must state only facts and metrics explicitly verified in the source. "
+        "Visual action descriptions must illustrate source concepts without inventing unstated client organizations, customer quotes, or fabricated case studies. "
+        "Do not introduce exaggerated narrative drama or speculative causal claims."
     ),
 }
 
@@ -237,6 +270,7 @@ GENERAL ADAPTATION & QUALITY RULES:
 7. If an attached video is provided, examine and interpret its visual scenes, motion progression, on-screen text/chyrons, demonstrations, and spoken audio track, integrating those insights directly.
 8. Do NOT include conversational filler, introductory remarks, or meta-commentary (e.g., do not say "Here is your summary").
 9. Output ONLY the JSON object. Do not include markdown formatting or backticks outside the JSON.
+10. STRICT FACTUAL GROUNDING & CAUSAL INTEGRITY: Every factual statement, metric, entity, event, hook, and hashtag must be strictly grounded in the source content. You may paraphrase and synthesize facts, but you must NOT introduce new causal relationships, outcomes, benefits, or qualitative conclusions that are not supported by the source. Avoid unsubstantiated qualitative claims or unsupported phrases (e.g., 'directly enhancing operational efficiency', 'improving incident containment', 'exceptional efficacy', 'complex threat vectors', 'safeguarding enterprise assets', or 'substantial operational and defensive gains'). For social media formats (such as LinkedIn and Twitter/X), opening hooks and closing CTAs must be anchored exclusively in source facts rather than invented marketing claims, and hashtags must be restricted to terms and concepts explicitly present in the source (never infer broader thematic hashtags like #OperationalEfficiency when not in the source).
 """
 
 
@@ -316,6 +350,102 @@ def call_gemini_with_retry(
             raise last_exception
 
 
+def build_recovery_prompt(
+    source_content: str,
+    output_type: str,
+    target_audience: str,
+    tone: str,
+    language: str,
+    detail_level: str,
+    validation_issues: Optional[List[str]] = None,
+    previous_output: Optional[str] = None,
+    grounding_details: Optional[Dict[str, Any]] = None,
+    communication_objective: Optional[str] = None,
+    content_style: Optional[str] = None,
+    document_name: Optional[str] = None,
+    image_name: Optional[str] = None,
+    video_name: Optional[str] = None
+) -> str:
+    """
+    Constructs a feedback-aware recovery prompt for the LLM when an initial output
+    fails structural validation or factual grounding checks.
+    Explicitly provides the previous draft, the exact detected issues, and strict correction instructions.
+    """
+    doc_spec = f"\n- Source Document Name: {document_name}" if document_name else ""
+    img_spec = f"\n- Attached Source Image: {image_name} (Analyze and synthesize all visual charts, diagrams, graphics, and text from the image)" if image_name else ""
+    vid_spec = f"\n- Attached Source Video: {video_name} (Thoroughly examine visual narrative, scene progression, demonstrations, on-screen text, and spoken audio in the video)" if video_name else ""
+
+    format_instruction = get_format_instruction(output_type)
+
+    if previous_output and previous_output.strip():
+        draft_section = f"""PREVIOUS DRAFT (REJECTED DUE TO QUALITY / GROUNDING VIOLATIONS):
+\"\"\"
+{previous_output.strip()}
+\"\"\""""
+    else:
+        draft_section = "PREVIOUS DRAFT: [Missing or empty output from initial generation]"
+
+    issues_list = []
+    if validation_issues:
+        for issue in validation_issues:
+            issues_list.append(f"- {issue}")
+
+    if grounding_details:
+        unverified_metrics = grounding_details.get("unverified_metrics", [])
+        if unverified_metrics:
+            issues_list.append(f"- UNVERIFIED METRIC(S) NOT IN SOURCE: {', '.join(unverified_metrics)}. You MUST remove or correct these numbers.")
+        unsupported_events = grounding_details.get("unsupported_events", [])
+        if unsupported_events:
+            issues_list.append(f"- UNSUPPORTED EVENT(S) NOT IN SOURCE: {', '.join(unsupported_events)}. You MUST NOT state or imply these events.")
+        unsupported_entities = grounding_details.get("unsupported_entities", [])
+        if unsupported_entities:
+            issues_list.append(f"- UNSUPPORTED ENTITY/ORGANIZATION(S) NOT IN SOURCE: {', '.join(unsupported_entities)}. Remove all non-source entities.")
+        unsupported_claims = grounding_details.get("unsupported_claims", [])
+        if unsupported_claims:
+            for uc in unsupported_claims[:3]:
+                issues_list.append(f"- UNGROUNDED CLAIM: \"{uc}\". Paraphrase strictly what is verified in the source.")
+
+    if not issues_list:
+        issues_list.append("- Output was structurally non-compliant, incomplete, or truncated.")
+
+    issues_text = "\n".join(issues_list)
+
+    return f"""You are an expert AI content transformer.
+Your previous generation for '{output_type}' FAILED quality validation and factual grounding checks.
+You must regenerate and RECOVER this communication artefact, correcting every detected violation.
+
+TRANSFORMATION SPECIFICATIONS:
+- Target Artefact (Output Type): {output_type}
+- Target Audience: {target_audience}
+- Tone: {tone}
+- Communication Objective: {communication_objective or 'Inform'}
+- Content Style: {content_style or 'Direct & Concise'}
+- Language: {language}
+- Detail Level: {detail_level}{doc_spec}{img_spec}{vid_spec}
+
+SOURCE CONTENT:
+\"\"\"
+{source_content}
+\"\"\"
+
+{draft_section}
+
+SPECIFIC DEFECTS & GROUNDING VIOLATIONS TO FIX:
+{issues_text}
+
+FORMAT SPECIFICATION FOR '{output_type}':
+{format_instruction}
+
+RECOVERY INSTRUCTIONS:
+1. REGENERATE the complete '{output_type}' artefact from scratch, strictly fixing all defects listed above.
+2. ELIMINATE all unverified metrics, unsupported events, unsupported entities, and ungrounded qualitative extrapolations.
+3. Every factual statement, metric, entity, event, hook, and takeaway must be strictly grounded in the provided SOURCE CONTENT.
+4. Maintain the structural requirements for '{output_type}' (e.g., slide structure for Presentations, scene breakdown for Video Packages, hashtags for social posts).
+5. Output the result in '{language}' matching the '{target_audience}' audience and '{tone}' tone.
+6. Do NOT include conversational filler, apologetic remarks, or meta-commentary (e.g. do NOT say "Here is the corrected version"). Directly output the recovered artefact.
+"""
+
+
 def targeted_recover_missing_output(
     model: genai.GenerativeModel,
     output_type: str,
@@ -324,30 +454,54 @@ def targeted_recover_missing_output(
     tone: str,
     language: str,
     detail_level: str,
-    communication_objective: Optional[str],
-    content_style: Optional[str],
-    document_name: Optional[str],
-    image_name: Optional[str],
-    video_name: Optional[str],
-    multimodal_parts: list
+    communication_objective: Optional[str] = None,
+    content_style: Optional[str] = None,
+    document_name: Optional[str] = None,
+    image_name: Optional[str] = None,
+    video_name: Optional[str] = None,
+    multimodal_parts: Optional[list] = None,
+    previous_output: Optional[str] = None,
+    validation_issues: Optional[List[str]] = None,
+    grounding_details: Optional[Dict[str, Any]] = None
 ) -> str:
     """
-    Performs a single targeted Gemini request for one missing output format.
+    Performs a single targeted Gemini recovery request for one failed or missing output format,
+    incorporating previous draft content and explicit validation/grounding feedback.
     """
-    prompt = build_prompt(
-        source_content=source_content,
-        output_type=output_type.strip(),
-        target_audience=target_audience,
-        tone=tone,
-        language=language,
-        detail_level=detail_level,
-        communication_objective=communication_objective,
-        content_style=content_style,
-        document_name=document_name,
-        image_name=image_name,
-        video_name=video_name
-    )
-    content_payload = [prompt] + multimodal_parts if multimodal_parts else prompt
+    if previous_output or validation_issues or grounding_details:
+        prompt = build_recovery_prompt(
+            source_content=source_content,
+            output_type=output_type.strip(),
+            target_audience=target_audience,
+            tone=tone,
+            language=language,
+            detail_level=detail_level,
+            validation_issues=validation_issues,
+            previous_output=previous_output,
+            grounding_details=grounding_details,
+            communication_objective=communication_objective,
+            content_style=content_style,
+            document_name=document_name,
+            image_name=image_name,
+            video_name=video_name
+        )
+    else:
+        prompt = build_prompt(
+            source_content=source_content,
+            output_type=output_type.strip(),
+            target_audience=target_audience,
+            tone=tone,
+            language=language,
+            detail_level=detail_level,
+            communication_objective=communication_objective,
+            content_style=content_style,
+            document_name=document_name,
+            image_name=image_name,
+            video_name=video_name
+        )
+
+    parts = multimodal_parts or []
+    content_payload = [prompt] + parts if parts else prompt
     gen_config = genai.types.GenerationConfig(max_output_tokens=4096, temperature=0.3)
     response = call_gemini_with_retry(model, content_payload, generation_config=gen_config, max_retries=1)
     if not response or not response.text or not response.text.strip():
@@ -1363,44 +1517,271 @@ def validate_output(
             spanish_markers = {" de ", " la ", " el ", " en ", " los ", " las ", " por ", " para ", " una ", " un "}
             if not any(m in f" {text_lower} " for m in spanish_markers) and " the " in f" {text_lower} ":
                 issues.append(f"Output appears to be in English rather than requested language '{language}'.")
+        elif "french" in lang_lower:
+            french_markers = {" de ", " la ", " le ", " les ", " des ", " du ", " et ", " en ", " pour ", " dans ", " un ", " une ", " est ", " avec "}
+            if not any(m in f" {text_lower} " for m in french_markers) and " the " in f" {text_lower} ":
+                issues.append(f"Output appears to be in English rather than requested language '{language}'.")
+        elif "german" in lang_lower:
+            german_markers = {" der ", " die ", " das ", " und ", " in ", " den ", " von ", " zu ", " für ", " mit ", " ist ", " ein ", " eine ", " auf ", " nicht "}
+            if not any(m in f" {text_lower} " for m in german_markers) and " the " in f" {text_lower} ":
+                issues.append(f"Output appears to be in English rather than requested language '{language}'.")
 
     # 5. FORMAT-SPECIFIC COMPLIANCE CHECK
     ot_lower = output_type.strip().lower()
 
     if "presentation" in ot_lower:
-        # Presentation requires slide breakdown (e.g. Slide 1, Slide 2, Speaker Notes)
-        has_slides = bool(re.search(r"(?i)\bslide\s*(?:[0-9]+|\b)|speaker notes", text))
-        if not has_slides and len(text) > 50:
+        # Presentation format compliance checks:
+        # 1. Slide markers: Detect actual numbered slide headers (e.g. "Slide 1:", "## Slide 1", "**Slide 1**")
+        #    Rejects false positives that merely mention "slides" or "speaker notes" in running text.
+        clean_presentation = re.sub(r"^\[MOCK GENERATION[^\]]*\]\s*Audience:[^\n]*\n*", "", text, flags=re.IGNORECASE)
+        clean_presentation = re.sub(r"---\s*\(Note: Placeholder mock output[^\)]*\)\s*$", "", clean_presentation, flags=re.IGNORECASE).strip()
+
+        slide_pattern = r"(?im)(?:^|\n)\s*(?:[^\w\s]\s*)*(?:#+\s*|\*{1,2}\s*|\[\s*)?Slide\s*(?:#?\s*\d+|[IVXLCDM]+|one|two|three|four|five|six|seven|eight|nine|ten)\b"
+        slide_markers = list(re.finditer(slide_pattern, clean_presentation))
+        num_slides = len(slide_markers)
+
+        if num_slides == 0:
             issues.append("Presentation lacks slide-by-slide structure or speaker notes.")
             has_error = True
+        else:
+            # 2. Slide count: Specification requires a 4-6 slide presentation
+            if num_slides < 4:
+                issues.append(f"Presentation contains only {num_slides} slide(s); specification requires a 4–6 slide presentation.")
+            elif num_slides > 8:
+                issues.append(f"Presentation contains {num_slides} slides, exceeding the recommended 4–6 slide length.")
+
+            # 3. Slide content & Speaker notes structure
+            has_speaker_notes = bool(re.search(r"(?i)(?:\b(?:speaker['’]?s?\s*notes?|presenter['’]?s?\s*notes?)\b|(?:^|\n)\s*(?:[•\-\*]|\*{1,2})?\s*notes:\s*\S+)", clean_presentation))
+            if not has_speaker_notes:
+                issues.append("Presentation lacks speaker notes for slide delivery.")
+
+            has_bullets = bool(re.search(r"(?m)^\s*(?:[•\-\*]|\d+\.)\s+\S+", clean_presentation))
+            if not has_bullets:
+                issues.append("Presentation slides lack structured bullet points or slide content.")
 
     elif "video package" in ot_lower or "video" in ot_lower:
-        # Video Package requires storyboard/scene breakdown or narration/script
-        has_video_structure = bool(re.search(r"(?i)\bscene\s*(?:[0-9]+|\b)|storyboard|narration|voiceover|subtitles|visual description", text))
-        if not has_video_structure and len(text) > 50:
-            issues.append("Video Package lacks scene breakdown, storyboard, or narration/script structure.")
-            has_error = True
+        # Video Package structural dual-component check:
+        # Requires BOTH:
+        # 1. Scene / Storyboard structure (Scene 1, Scene 2, Storyboard Breakdown, Visual Description, On-Screen Text)
+        # 2. Voiceover / Audio structure (Voiceover Script, Full Voiceover, Narration, Audio/Voiceover, Dialogue)
+        clean_video = re.sub(r"^\[MOCK GENERATION[^\]]*\]\s*Audience:[^\n]*\n*", "", text, flags=re.IGNORECASE)
+        clean_video = re.sub(r"---\s*\(Note: Placeholder mock output[^\)]*\)\s*$", "", clean_video, flags=re.IGNORECASE).strip()
+
+        scene_pattern = (
+            r"(?im)(?:^|\n)\s*"
+            r"(?:[#•\-\*]+\s*|\d+[\.\)]\s*|\[\s*|\*{1,2}\s*)*"
+            r"(?:"
+            r"(?:scene|shot)\s*(?:#?\s*\d+|[IVXLCDM]+|one|two|three|four|five|six|seven|eight|nine|ten\b)"
+            r"|(?:scene-by-scene\s+)?storyboard(?:\s+breakdown)?"
+            r"|scene\s+breakdown"
+            r"|visual\s+(?:description|action)"
+            r"|on-screen\s+text(?:\s*(?:/|&)\s*subtitles?)?"
+            r"|chyrons?"
+            r")\b"
+            r"(?:\s*\])?"
+            r"(?:\s*\([^)\n]*\))?"
+            r"\s*(?:\*{1,2})?\s*"
+            r"(?::|—|-|\s*$|\n)"
+        )
+
+        audio_pattern = (
+            r"(?im)(?:^|\n)\s*"
+            r"(?:[#•\-\*]+\s*|\d+[\.\)]\s*|\[\s*|\*{1,2}\s*)*"
+            r"(?:"
+            r"(?:full\s+)?voiceover(?:\s+script)?"
+            r"|vo\s+script"
+            r"|narration(?:\s+script)?"
+            r"|narrator(?:\s*\([^)\n]*\))?"
+            r"|audio\s*(?:track|cues?|(?:\s*(?:/|&)\s*voiceover))?"
+            r"|spoken\s+dialogue"
+            r"|dialogue(?:\s+track)?"
+            r"|(?:narration|voiceover|audio)\s*(?:/|&|and)\s*(?:narration|voiceover|audio|script)"
+            r")\b"
+            r"(?:\s*\])?"
+            r"(?:\s*\([^)\n]*\))?"
+            r"\s*(?:\*{1,2})?\s*"
+            r"(?::|—|-|\s*$|\n)"
+        )
+
+        has_scene = bool(re.search(scene_pattern, clean_video))
+        has_audio = bool(re.search(audio_pattern, clean_video))
+
+        if not has_scene and not has_audio:
+            issues.append("Video Package lacks scene-by-scene storyboard structure and voiceover narration script.")
+        elif not has_scene:
+            issues.append("Video Package contains voiceover script but lacks scene-by-scene storyboard breakdown or visual cues.")
+        elif not has_audio:
+            issues.append("Video Package contains scene breakdown but lacks voiceover narration script or audio dialogue.")
 
     elif "infographic" in ot_lower:
-        # Infographic visual blueprint indicators (sections, metrics, layout, icons)
-        has_infographic_structure = bool(re.search(r"(?i)infographic|headline|metric|section|layout|visual|icon|blueprint", text))
-        if not has_infographic_structure and len(text) > 50:
-            issues.append("Infographic lacks visual blueprint components (metrics, sections, or layout recommendations).")
+        # Infographic structural dual-component check:
+        # Requires BOTH:
+        # 1. Visual / Layout component (Layout/Design Recommendations, Visual Blueprint, Chart/Icon suggestions)
+        # 2. Data / Content component (Sectional Stat/Metric/Data Callouts, Sectional Narrative Flow)
+        clean_infographic = re.sub(r"^\[MOCK GENERATION[^\]]*\]\s*Audience:[^\n]*\n*", "", text, flags=re.IGNORECASE)
+        clean_infographic = re.sub(r"---\s*\(Note: Placeholder mock output[^\)]*\)\s*$", "", clean_infographic, flags=re.IGNORECASE).strip()
+
+        visual_pattern = r"(?im)(?:^|\n)\s*(?:[#•\-\*]+\s*|\d+[\.\)]\s*|\*{1,2}\s*)*(?:(?:layout|visual|design|infographic)\s*(?:&|and|/)?\s*(?:visual|layout|design|recommendations?|blueprint|specifications?|wireframe|hierarchy|elements?)|(?:suggested\s+)?(?:icons?|charts?|graphics?)\s*(?:&|and|/)?\s*(?:icons?|charts?|graphics?|suggestions?|recommendations?|ideas?)|visual\s+hierarchy|layout\s*:\s*\S+)\b[^\n:]*(?:\*{1,2})?\s*(?::|—|-|\n|$)"
+        data_pattern = r"(?im)(?:^|\n)\s*(?:[#•\-\*]+\s*|\d+[\.\)]\s*|\*{1,2}\s*)*(?:(?:key|core|primary|main)\s+(?:data|stats?|statistics?|metrics?|points?|pillar\s+points?)|(?:stat|metric|data)\s*callouts?|sectional\s+(?:narrative\s+flow|breakdown|flow|structure)|section\s+[A-Z0-9]+(?:\s*\([^)]*\))?|narrative\s+flow)\b[^\n:]*(?:\*{1,2})?\s*(?::|—|-|\n|$)"
+
+        has_visual = bool(re.search(visual_pattern, clean_infographic))
+        has_data = bool(re.search(data_pattern, clean_infographic))
+
+        if not has_visual and not has_data:
+            issues.append("Infographic lacks visual/layout recommendations and sectional data/metric callouts.")
+        elif not has_visual:
+            issues.append("Infographic contains data/metric callouts but lacks layout or visual design recommendations.")
+        elif not has_data:
+            issues.append("Infographic contains visual recommendations but lacks sectional stat/metric callouts or data breakdown.")
 
     elif "linkedin" in ot_lower:
-        # LinkedIn Post should have hashtags
-        if "#" not in text:
-            issues.append("LinkedIn Post is missing hashtags.")
+        # LinkedIn Post structural compliance checks:
+        # Requires:
+        # 1. Opening hook (Hook / Headline header, opening emoji lead-in, or question opener)
+        # 2. Structured body / key takeaways (Key Takeaways, bullet points, breakdown, or numbered takeaways)
+        # 3. Closing call-to-action (CTA / discussion prompt / question / comment request)
+        # 4. Relevant hashtags (actual hashtag tokens matching #tag)
+        clean_linkedin = re.sub(r"^\[MOCK GENERATION[^\]]*\]\s*Audience:[^\n]*\n*", "", text, flags=re.IGNORECASE)
+        clean_linkedin = re.sub(r"---\s*\(Note: Placeholder mock output[^\)]*\)\s*$", "", clean_linkedin, flags=re.IGNORECASE).strip()
+
+        hook_pattern = (
+            r"(?im)(?:^|\n)\s*"
+            r"(?:"
+            r"(?:[🚀💡🛡️🎯📢🔥⚡✨🔍📌💼🌐📊🔒🏆👋👀]\s*)+[^\n]+"
+            r"|(?:[#•\-\*]+\s*|\*{1,2}\s*)*(?:opening\s+)?(?:hook|headline|lead-in)\b[^\n:]*(?:\*{1,2})?\s*(?::|—|-|\s*$|\n)"
+            r"|(?:did you know|have you ever|what if|why do|how can|are you)\b[^\n]*\?"
+            r"|(?:(?:enterprise|industry|strategic|operational|project|executive|leadership)\s+)?(?:update|brief|announcement|insights?|alert)\b[^\n:]*(?:\*{1,2})?\s*(?::|—|-|\s*$|\n)"
+            r")"
+        )
+
+        body_pattern = (
+            r"(?im)(?:^|\n)\s*"
+            r"(?:"
+            r"(?:[#•\-\*💡📌🔹▪️]+\s*|\d+[\.\)]\s*|\*{1,2}\s*)*(?:(?:key|core|primary|main|strategic)\s+)?(?:takeaways?|findings?|points?|pillars?|highlights?|insights?)\b[^\n:]*(?:\*{1,2})?\s*(?::|—|-|\s*$|\n)"
+            r"|here\s+(?:is|[\x27\u2019]?s)\s+what\s+(?:you\s+need\s+to\s+know|happened|matters)\b[^\n:]*(?:\*{1,2})?\s*(?::|—|-|\s*$|\n)"
+            r"|the\s+breakdown\b[^\n:]*(?:\*{1,2})?\s*(?::|—|-|\s*$|\n)"
+            r"|(?:^|\n)\s*(?:[•\-\*]|\d+\.)\s+\S+"
+            r")"
+        )
+
+        cta_pattern = (
+            r"(?im)(?:^|\n)\s*"
+            r"(?:"
+            r"(?:[#•\-\*👇👉]+\s*|\*{1,2}\s*)*(?:call\s+to\s+action|cta|discussion|question|next\s+steps?)\b[^\n:]*(?:\*{1,2})?\s*(?::|—|-|\s*$|\n)"
+            r"|(?:what|how)\s+(?:are|do|is|would|can)\s+(?:you|your|we)\b[^\n]*\?"
+            r"|(?:share|drop|leave|tell|let)\s+(?:us\s+know|your\s+thoughts|your\s+perspective|a\s+comment|below)\b[^\n]*"
+            r"|(?:join\s+the\s+(?:conversation|discussion)|comment\s+below|thoughts\?|what\s+do\s+you\s+think\?)"
+            r"|(?:repost|follow\s+for\s+more|check\s+out|learn\s+more\s+at)\b[^\n]*"
+            r")"
+        )
+
+        has_hook = bool(re.search(hook_pattern, clean_linkedin))
+        has_body = bool(re.search(body_pattern, clean_linkedin))
+        has_cta = bool(re.search(cta_pattern, clean_linkedin))
+        has_hashtags = bool(re.search(r"(?<!\S)#[A-Za-z0-9_]+", clean_linkedin))
+
+        missing_components = []
+        if not has_hook:
+            missing_components.append("opening hook")
+        if not has_body:
+            missing_components.append("structured body / key takeaways")
+        if not has_cta:
+            missing_components.append("call-to-action (CTA)")
+        if not has_hashtags:
+            missing_components.append("relevant hashtags")
+
+        if len(missing_components) == 4:
+            issues.append("LinkedIn Post lacks required structure (opening hook, structured body/takeaways, call-to-action, and hashtags).")
+        elif len(missing_components) > 1:
+            missing_str = ", ".join(missing_components[:-1]) + " and " + missing_components[-1]
+            issues.append(f"LinkedIn Post is missing structural components: {missing_str}.")
+        elif len(missing_components) == 1:
+            comp = missing_components[0]
+            if comp == "relevant hashtags":
+                issues.append("LinkedIn Post is missing hashtags.")
+            elif comp == "opening hook":
+                issues.append("LinkedIn Post is missing an opening hook or headline.")
+            elif comp == "call-to-action (CTA)":
+                issues.append("LinkedIn Post is missing a closing call-to-action (CTA) or discussion prompt.")
+            else:
+                issues.append(f"LinkedIn Post is missing {comp}.")
+
+    elif "twitter" in ot_lower or "x post" in ot_lower:
+        # Twitter/X Post format compliance checks:
+        # 1. Hashtags: Specification requires high-impact hook, takeaways, and relevant hashtags
+        has_hashtags = bool(re.search(r"(?<!\S)#[A-Za-z0-9_]+", text))
+        if not has_hashtags:
+            issues.append("Twitter/X Post is missing required hashtags.")
+
+        # 2. Length / Brevity: Each segment must be under 280 characters, or short thread
+        clean_text = re.sub(r"^\[MOCK GENERATION[^\]]*\]\s*Audience:[^\n]*\n*", "", text, flags=re.IGNORECASE)
+        clean_text = re.sub(r"---\s*\(Note: Placeholder mock output[^\)]*\)\s*$", "", clean_text, flags=re.IGNORECASE).strip()
+
+        is_threaded = bool(re.search(r"(?:^|\n)\s*(?:🧵|\b\d+[\/:]|\b\d+\/\d+|\bpart\s*\d+)", clean_text, re.IGNORECASE))
+        if not is_threaded:
+            if len(clean_text) > 280:
+                issues.append(f"Twitter/X Post exceeds 280-character platform limit ({len(clean_text)} characters) without thread segmentation.")
+        else:
+            segments = [
+                s.strip() for s in re.split(r"\n+(?=(?:🧵|\b\d+[\/:]|\b\d+\/\d+|\bpart\s*\d+))", clean_text, flags=re.IGNORECASE)
+                if s.strip()
+            ]
+            overlong_segments = [s for s in segments if len(s) > 280]
+            if overlong_segments:
+                issues.append(f"Twitter/X thread contains {len(overlong_segments)} segment(s) exceeding the 280-character limit.")
+            if len(segments) > 6 or len(clean_text) > 1680:
+                issues.append(f"Twitter/X thread exceeds recommended concise thread length ({len(segments)} segments, {len(clean_text)} characters).")
 
     elif "advisory" in ot_lower:
-        has_advisory_structure = bool(re.search(r"(?i)advisory|bulletin|impact|risk|directive|action|guidance|recommend", text))
-        if not has_advisory_structure and len(text) > 50:
-            issues.append("Advisory lacks clear risk/impact or directive structure.")
+        # Advisory structural dual-component check:
+        # Requires BOTH:
+        # 1. Risk / Context component (Risk, Context, Situation, Threat, Impact)
+        # 2. Directive / Guidance component (Directive, Guidance, Recommendations, Required Actions, Next Steps)
+        clean_advisory = re.sub(r"^\[MOCK GENERATION[^\]]*\]\s*Audience:[^\n]*\n*", "", text, flags=re.IGNORECASE)
+        clean_advisory = re.sub(r"---\s*\(Note: Placeholder mock output[^\)]*\)\s*$", "", clean_advisory, flags=re.IGNORECASE).strip()
+
+        risk_pattern = r"(?im)(?:^|\n)\s*(?:[#•\-\*]+\s*|\d+[\.\)]\s*|\*{1,2}\s*)*(?:(?:operational|security|strategic|technical|critical|immediate)\s+)?(?:risk\s*&?\s*operational\s+impact|risk\s*analysis|risks?|threat\s+vectors?|threats?|threat\s+assessment|context|situation|impacts?)\b[^\n:]*(?:\*{1,2})?\s*(?::|—|-|\n|$)"
+        directive_pattern = r"(?im)(?:^|\n)\s*(?:[#•\-\*]+\s*|\d+[\.\)]\s*|\*{1,2}\s*)*(?:(?:recommended|mandatory|required|strategic|operational|immediate|key)\s+)?(?:directives?|guidance|recommendations?|action\s+items?|required\s+actions?|next\s+steps?|action\s+required)\b[^\n:]*(?:\*{1,2})?\s*(?::|—|-|\n|$)"
+
+        has_risk = bool(re.search(risk_pattern, clean_advisory))
+        has_directive = bool(re.search(directive_pattern, clean_advisory))
+
+        if not has_risk and not has_directive:
+            issues.append("Advisory lacks clear risk/context framing and directive/guidance structure.")
+        elif not has_risk:
+            issues.append("Advisory contains directives/guidance but lacks risk analysis or context framing.")
+        elif not has_directive:
+            issues.append("Advisory contains risk/context framing but lacks actionable directives or guidance.")
 
     elif "executive summary" in ot_lower:
-        has_exec_structure = bool(re.search(r"(?i)overview|summary|impact|takeaway|finding|strategic|recommend", text))
-        if not has_exec_structure and len(text) > 50:
-            issues.append("Executive Summary lacks overview or strategic impact components.")
+        # Executive Summary structural compliance checks:
+        # Requires at least TWO distinct structural categories:
+        # 1. Overview / Context category (Executive Overview, Overview, Context, Background, Situation)
+        # 2. Findings / Impact category (Key Findings, Findings, Key Takeaways, Takeaways, Strategic Impact, Impact)
+        # 3. Action category (Recommendations, Recommended Actions, Action Items, Next Steps, Strategic Recommendations)
+        clean_exec = re.sub(r"^\[MOCK GENERATION[^\]]*\]\s*Audience:[^\n]*\n*", "", text, flags=re.IGNORECASE)
+        clean_exec = re.sub(r"---\s*\(Note: Placeholder mock output[^\)]*\)\s*$", "", clean_exec, flags=re.IGNORECASE).strip()
+
+        overview_pattern = r"(?im)(?:^|\n)\s*(?:[#•\-\*]+\s*|\d+[\.\)]\s*|\*{1,2}\s*)*(?:(?:executive|project|strategic|operational|contextual)\s+)?(?:overview|context|background|situation)\b[^\n:]*(?:\*{1,2})?\s*(?::|—|-|\n|$)"
+        findings_pattern = r"(?im)(?:^|\n)\s*(?:[#•\-\*]+\s*|\d+[\.\)]\s*|\*{1,2}\s*)*(?:(?:key|core|primary|main|strategic|operational|business)\s+)?(?:findings?|takeaways?|impacts?)\b[^\n:]*(?:\*{1,2})?\s*(?::|—|-|\n|$)"
+        action_pattern = r"(?im)(?:^|\n)\s*(?:[#•\-\*]+\s*|\d+[\.\)]\s*|\*{1,2}\s*)*(?:(?:recommended|strategic|key|immediate|priority)\s+)?(?:recommendations?|actions?|action\s+items?|action\s+plan|next\s+steps?)\b[^\n:]*(?:\*{1,2})?\s*(?::|—|-|\n|$)"
+
+        has_overview = bool(re.search(overview_pattern, clean_exec))
+        has_findings = bool(re.search(findings_pattern, clean_exec))
+        has_action = bool(re.search(action_pattern, clean_exec))
+
+        exec_categories = []
+        if has_overview:
+            exec_categories.append("Overview/Context")
+        if has_findings:
+            exec_categories.append("Findings/Impact")
+        if has_action:
+            exec_categories.append("Action/Recommendations")
+
+        if len(exec_categories) == 0:
+            issues.append("Executive Summary lacks multi-section structure or strategic components (overview, findings/impact, or action items).")
+        elif len(exec_categories) < 2:
+            issues.append(f"Executive Summary contains only 1 structural component ({exec_categories[0]}); specification requires at least two distinct components (Overview/Context, Findings/Impact, Action/Recommendations).")
 
     # Determine overall severity
     if has_error:
@@ -1487,6 +1868,31 @@ def build_output_provenance(
     }
 
 
+def should_trigger_recovery(validation_result: Dict[str, Any]) -> bool:
+    """
+    Determines whether an output artefact requires automated targeted recovery.
+    Triggers recovery if:
+    1. Structural / fatal errors (severity == 'error' or valid == False)
+    2. Critical/unsafe grounding failures (unverified metrics, unsupported corporate events,
+       unsupported entities, or unsupported claims where is_grounded is False).
+    Non-critical warnings (e.g. length deviation, minor style warnings) do NOT trigger recovery.
+    """
+    if validation_result.get("severity") == "error" or not validation_result.get("valid", True):
+        return True
+
+    factual_grounding = validation_result.get("factual_grounding", {})
+    if not factual_grounding.get("is_grounded", True):
+        # Trigger recovery for unsafe/invalid factual fabrications:
+        has_metrics = len(factual_grounding.get("unverified_metrics", [])) > 0
+        has_events = len(factual_grounding.get("unsupported_events", [])) > 0
+        has_entities = len(factual_grounding.get("unsupported_entities", [])) > 0
+        has_claims = len(factual_grounding.get("unsupported_claims", [])) > 0
+        if has_metrics or has_events or has_entities or has_claims:
+            return True
+
+    return False
+
+
 def validate_and_recover_outputs(
     outputs: Dict[str, str],
     request: TransformRequest,
@@ -1495,8 +1901,8 @@ def validate_and_recover_outputs(
 ) -> Tuple[Dict[str, str], Dict[str, Any]]:
     """
     Validates all requested outputs across the 5 quality dimensions.
-    If an output has actionable 'error' severity (missing, truncated, or structurally non-compliant),
-    attempts a single targeted recovery for that specific format only.
+    If an output fails structural validity or contains critical factual grounding violations,
+    attempts a single feedback-aware targeted recovery for that specific format only.
     Re-validates the recovered output (maximum 1 recovery attempt per format).
     Returns (final_outputs, validation_report).
     """
@@ -1525,14 +1931,19 @@ def validate_and_recover_outputs(
         )
         validation_results[ot] = val
 
-    # 2. Identify outputs requiring targeted recovery (severity == 'error')
-    failed_outputs = [ot for ot in request.output_types if validation_results[ot]["severity"] == "error"]
+    # 2. Identify outputs requiring targeted recovery (structural errors or unsafe grounding failures)
+    failed_outputs = [ot for ot in request.output_types if should_trigger_recovery(validation_results[ot])]
     recovered_formats: List[str] = []
 
     # 3. Targeted Recovery (At most ONE attempt per failed output)
     if failed_outputs and model is not None:
         for failed_ot in failed_outputs:
             try:
+                prev_text = outputs.get(failed_ot, "")
+                prev_val = validation_results.get(failed_ot, {})
+                prev_issues = prev_val.get("issues", [])
+                prev_grounding = prev_val.get("factual_grounding", {})
+
                 recovered_text = targeted_recover_missing_output(
                     model=model,
                     output_type=failed_ot,
@@ -1546,7 +1957,10 @@ def validate_and_recover_outputs(
                     document_name=request.document_name,
                     image_name=request.image_name,
                     video_name=request.video_name,
-                    multimodal_parts=multimodal_parts
+                    multimodal_parts=multimodal_parts,
+                    previous_output=prev_text,
+                    validation_issues=prev_issues,
+                    grounding_details=prev_grounding
                 )
 
                 # Re-validate the recovered output
@@ -2100,7 +2514,7 @@ FORMAT SPECIFICATION:
 
 REFINEMENT RULES:
 1. Apply the user's refinement instruction directly, meaningfully, and comprehensively to update the current output.
-2. Maintain strict factual grounding in the original source content. Do NOT fabricate metrics, data, or facts.
+2. Maintain strict factual grounding in the original source content. Do NOT fabricate metrics, data, or facts. You may paraphrase and synthesize facts, but do NOT introduce new causal relationships, speculative outcomes, unstated benefits, or qualitative conclusions not supported by the source (avoid unsupported phrases like 'directly enhancing operational efficiency', 'improving incident containment', 'exceptional efficacy', 'complex threat vectors', or 'safeguarding enterprise assets'). For LinkedIn Posts, hooks, CTAs, and hashtags must be derived strictly and exclusively from explicitly stated facts/entities in the source without broader inferred claims or hashtags (e.g., do not generate #OperationalEfficiency when the source only mentions processing time).
 3. Preserve the core structural requirements of the '{output_type}' format.
 4. Output the refined content in '{language}'.
 5. Return your response strictly as a valid JSON object with EXACTLY one key: "{output_type}".

@@ -5,13 +5,18 @@ unsupported qualitative/quantitative hallucinations, and existing metric regress
 """
 
 import unittest
+from unittest.mock import MagicMock
+from schemas.transform_schema import TransformRequest
 from services.transform_service import (
     verify_factual_grounding,
     validate_output,
     extract_key_factual_tokens,
     _stem_word,
     _is_scaffolding_or_boilerplate,
-    _split_into_claim_candidates
+    _split_into_claim_candidates,
+    build_recovery_prompt,
+    should_trigger_recovery,
+    validate_and_recover_outputs
 )
 
 CYBERSHIELD_SOURCE = (
@@ -250,6 +255,35 @@ class TestCyberShieldUnsupportedDetection(unittest.TestCase):
         self.assertNotIn("acquisition", res_cred["unsupported_events"])
         self.assertEqual(len(res_cred["unsupported_events"]), 0)
         self.assertEqual(len(res_cred["unsupported_claims"]), 0)
+
+    def test_unsupported_causal_and_qualitative_claims_rejected(self):
+        """
+        Regression test: Proves that unsupported causal implications and unstated qualitative conclusions
+        are rejected as unsupported claims by factual grounding, while source-faithful statements are accepted.
+        """
+        # 1. Qualitative claims with ungrounded conclusions must be flagged as unsupported
+        qual_claim = "Internal pilot testing data indicates substantial operational and defensive gains."
+        res_qual = verify_factual_grounding(CYBERSHIELD_SOURCE, qual_claim)
+        self.assertFalse(res_qual["is_grounded"])
+        self.assertIn(qual_claim, res_qual["unsupported_claims"])
+
+        # 2. Causal claims asserting unstated outcomes/benefits must be flagged as unsupported
+        causal_claim = (
+            "The implementation yielded a 68% reduction in threat response times, "
+            "directly enhancing operational efficiency and incident containment."
+        )
+        res_causal = verify_factual_grounding(CYBERSHIELD_SOURCE, causal_claim)
+        self.assertFalse(res_causal["is_grounded"])
+        self.assertIn(causal_claim, res_causal["unsupported_claims"])
+
+        # 3. Source-faithful statement without invented causal implications is accepted as grounded
+        faithful_claim = (
+            "Internal pilot testing showed a 68% reduction in threat response times "
+            "through automated detection mechanisms."
+        )
+        res_faithful = verify_factual_grounding(CYBERSHIELD_SOURCE, faithful_claim)
+        self.assertTrue(res_faithful["is_grounded"], f"Faithful claim falsely rejected: {res_faithful}")
+        self.assertEqual(len(res_faithful["unsupported_claims"]), 0)
 
 
 class TestGroundingRegressionAndHardening(unittest.TestCase):
@@ -599,8 +633,1487 @@ class TestScaffoldingAndActionExclusionHardening(unittest.TestCase):
             self.assertEqual(len(res["unsupported_claims"]), 0)
 
 
+
+COLLEGE_ATTENDANCE_SOURCE = (
+    "In 2026, our college introduced a digital attendance system featuring real-time attendance records and automated notifications to students. "
+    "During the first semester, attendance processing time decreased by 40%."
+)
+
+
+class TestLinkedInGroundingRegression(unittest.TestCase):
+    """
+    Regression tests specifically validating factual grounding constraints for LinkedIn Posts
+    using the college attendance source.
+    """
+
+    def test_case_a_unsupported_broader_hook_ungrounded(self):
+        # Case A: "Optimizing institutional operations through digital transformation yields measurable returns." -> must be ungrounded
+        claim_a = "Optimizing institutional operations through digital transformation yields measurable returns."
+        res = verify_factual_grounding(COLLEGE_ATTENDANCE_SOURCE, claim_a)
+        self.assertFalse(res["is_grounded"], f"Case A should be ungrounded: {res}")
+        self.assertIn(claim_a, res["unsupported_claims"])
+
+    def test_case_b_operational_efficiency_extrapolation_not_supported(self):
+        # Case B: "#OperationalEfficiency" / equivalent claim involving operational efficiency
+        # should not be treated as a supported source concept when source only says processing time decreased by 40%
+        self.assertNotIn("operational efficiency", COLLEGE_ATTENDANCE_SOURCE.lower())
+
+        claims = [
+            "The implementation delivered improved operational efficiency across campus.",
+            "This initiative improved operational efficiency for the college.",
+            "Digital attendance systems deliver superior operational efficiency and organizational productivity.",
+            "The new system maximizes operational efficiency."
+        ]
+        for c in claims:
+            res = verify_factual_grounding(COLLEGE_ATTENDANCE_SOURCE, c)
+            self.assertFalse(res["is_grounded"], f"Operational efficiency claim should be ungrounded: '{c}' -> {res}")
+            self.assertIn(c, res["unsupported_claims"])
+
+    def test_case_c_source_faithful_statement_grounded(self):
+        # Case C: A source-faithful LinkedIn statement such as:
+        # "Our college introduced a digital attendance system in 2026, and attendance processing time decreased by 40% during the first semester."
+        # -> must remain grounded.
+        claim_c = (
+            "Our college introduced a digital attendance system in 2026, and attendance "
+            "processing time decreased by 40% during the first semester."
+        )
+        res = verify_factual_grounding(COLLEGE_ATTENDANCE_SOURCE, claim_c)
+        self.assertTrue(res["is_grounded"], f"Case C should be grounded: {res}")
+        self.assertEqual(len(res["unsupported_claims"]), 0)
+        self.assertEqual(len(res["unverified_metrics"]), 0)
+        self.assertEqual(len(res["unsupported_events"]), 0)
+        self.assertIn("40%", res["cited_facts"])
+        self.assertIn("2026", res["cited_facts"])
+
+
+
+CLINICAL_TRIAL_SOURCE = (
+    "In a 2025 multi-center clinical study involving 450 adult patients, the CardioPulse remote monitoring device "
+    "reduced hospital readmission rates by 32% over a six-month follow-up period. The system transmits continuous ECG telemetry "
+    "and alerts on-call clinicians to cardiac arrhythmias in real time. The device received FDA 510(k) clearance in October 2025."
+)
+
+SOLAR_GRID_SOURCE = (
+    "HelioGrid completed the installation of its smart photovoltaic microgrid at the Mojave Desert facility in August 2025. "
+    "During peak daylight hours, the 50-megawatt solar array met 85% of local auxiliary power demands while reducing grid transmission losses by 18%. "
+    "The facility utilizes lithium-iron-phosphate battery storage with automated load switching and conforms to IEEE 1547 interconnection standards."
+)
+
+
+class TestMultiFormatSourceAgnosticGroundingRegression(unittest.TestCase):
+    """
+    Validates factual grounding across Advisory, Twitter/X Post, Infographic,
+    Presentation, and Video Package formats across two different fictional sources.
+    """
+
+    # --- 1. ADVISORY TESTS (using CLINICAL_TRIAL_SOURCE) ---
+    def test_advisory_source_faithful_grounded(self):
+        output = (
+            "Advisory: Clinical Implementation of CardioPulse Remote Monitoring\n"
+            "Context: In a 2025 clinical study involving 450 adult patients, the CardioPulse remote monitoring device demonstrated a 32% reduction in hospital readmission rates over six months.\n"
+            "Operational Impact: The system transmits continuous ECG telemetry and alerts on-call clinicians to cardiac arrhythmias in real time.\n"
+            "Regulatory Directives: Clinical teams must follow device protocols following FDA 510(k) clearance in October 2025."
+        )
+        res = verify_factual_grounding(CLINICAL_TRIAL_SOURCE, output)
+        self.assertTrue(res["is_grounded"], f"Faithful advisory falsely ungrounded: {res}")
+        self.assertEqual(len(res["unsupported_claims"]), 0)
+        self.assertEqual(len(res["unverified_metrics"]), 0)
+
+    def test_advisory_invented_metric_rejected(self):
+        output = "Advisory: The CardioPulse device reduced hospital readmission rates by 75% across participating health networks."
+        res = verify_factual_grounding(CLINICAL_TRIAL_SOURCE, output)
+        self.assertFalse(res["is_grounded"])
+        self.assertIn("75%", res["unverified_metrics"])
+
+    def test_advisory_invented_event_entity_rejected(self):
+        output = "Advisory: CardioPulse announced the acquisition of Zurich Biosensors to expand European clinical operations."
+        res = verify_factual_grounding(CLINICAL_TRIAL_SOURCE, output)
+        self.assertFalse(res["is_grounded"])
+        self.assertTrue("acquisition" in res["unsupported_events"] or len(res["unsupported_claims"]) > 0)
+
+    def test_advisory_unsupported_causal_benefit_rejected(self):
+        output = "Advisory: Remote monitoring directly eliminated emergency surgical interventions and generated $12M in hospital cost savings."
+        res = verify_factual_grounding(CLINICAL_TRIAL_SOURCE, output)
+        self.assertFalse(res["is_grounded"])
+        self.assertTrue(len(res["unsupported_claims"]) > 0 or len(res["unverified_metrics"]) > 0)
+
+    # --- 2. TWITTER/X POST TESTS (using CLINICAL_TRIAL_SOURCE) ---
+    def test_twitter_source_faithful_grounded(self):
+        output = (
+            "1/2: In a 2025 study of 450 adult patients, the CardioPulse remote monitoring device reduced hospital readmission rates by 32% over six months.\n"
+            "2/2: The system transmits continuous ECG telemetry with real-time arrhythmia alerts and holds FDA 510(k) clearance from October 2025. #CardioPulse #FDA"
+        )
+        res = verify_factual_grounding(CLINICAL_TRIAL_SOURCE, output)
+        self.assertTrue(res["is_grounded"], f"Faithful Twitter post falsely ungrounded: {res}")
+        self.assertEqual(len(res["unsupported_claims"]), 0)
+
+    def test_twitter_invented_metric_rejected(self):
+        output = "CardioPulse cut patient mortality by 65% across 1,200 intensive care units nationwide. #CardioPulse"
+        res = verify_factual_grounding(CLINICAL_TRIAL_SOURCE, output)
+        self.assertFalse(res["is_grounded"])
+        self.assertIn("65%", res["unverified_metrics"])
+
+    def test_twitter_invented_event_rejected(self):
+        output = "CardioPulse finalized a merger with Boston Surgical to monopolize cardiac telemetry."
+        res = verify_factual_grounding(CLINICAL_TRIAL_SOURCE, output)
+        self.assertFalse(res["is_grounded"])
+        self.assertIn("merger", res["unsupported_events"])
+
+    def test_twitter_unsupported_benefit_rejected(self):
+        output = "CardioPulse completely revolutionized patient longevity through digital healthcare transformation."
+        res = verify_factual_grounding(CLINICAL_TRIAL_SOURCE, output)
+        self.assertFalse(res["is_grounded"])
+        self.assertGreaterEqual(len(res["unsupported_claims"]), 1)
+
+    # --- 3. INFOGRAPHIC TESTS (using SOLAR_GRID_SOURCE) ---
+    def test_infographic_source_faithful_grounded(self):
+        output = (
+            "Infographic Specification: HelioGrid Mojave Desert Microgrid\n"
+            "Core Message: HelioGrid installed a smart photovoltaic microgrid at the Mojave Desert facility in August 2025.\n"
+            "Key Points & Verified Statistics:\n"
+            "• 50-megawatt solar array capacity installed in August 2025.\n"
+            "• Met 85% of local auxiliary power demands during peak daylight hours.\n"
+            "• Grid transmission losses decreased by 18%.\n"
+            "• Conforms to IEEE 1547 interconnection standards with lithium-iron-phosphate battery storage.\n"
+            "Visual Recommendations: Bar chart illustrating 85% auxiliary demand coverage and 18% transmission loss reduction."
+        )
+        res = verify_factual_grounding(SOLAR_GRID_SOURCE, output)
+        self.assertTrue(res["is_grounded"], f"Faithful infographic falsely ungrounded: {res}")
+        self.assertEqual(len(res["unsupported_claims"]), 0)
+        self.assertEqual(len(res["unverified_metrics"]), 0)
+
+    def test_infographic_invented_metric_rejected(self):
+        output = "Data Pillar 1: The solar facility reduced carbon emissions by 94% in the first quarter."
+        res = verify_factual_grounding(SOLAR_GRID_SOURCE, output)
+        self.assertFalse(res["is_grounded"])
+        self.assertIn("94%", res["unverified_metrics"])
+
+    def test_infographic_invented_entity_event_rejected(self):
+        output = "HelioGrid entered into an enterprise partnership with Nevada Power Corp for regional distribution."
+        res = verify_factual_grounding(SOLAR_GRID_SOURCE, output)
+        self.assertFalse(res["is_grounded"])
+        self.assertIn("partnership", res["unsupported_events"])
+
+    def test_infographic_unsupported_benefit_rejected(self):
+        output = "The microgrid installation achieved complete commercial energy independence for the regional power authority."
+        res = verify_factual_grounding(SOLAR_GRID_SOURCE, output)
+        self.assertFalse(res["is_grounded"])
+        self.assertGreaterEqual(len(res["unsupported_claims"]), 1)
+
+    # --- 4. PRESENTATION TESTS (using SOLAR_GRID_SOURCE) ---
+    def test_presentation_source_faithful_grounded(self):
+        output = (
+            "Slide 1: HelioGrid Mojave Desert Facility Overview\n"
+            "• HelioGrid completed installation of its smart photovoltaic microgrid at the Mojave Desert facility in August 2025.\n"
+            "• System features lithium-iron-phosphate battery storage with automated load switching.\n"
+            "Slide 2: Operating Performance & Interconnection\n"
+            "• The 50-megawatt solar array met 85% of local auxiliary power demands during peak daylight hours.\n"
+            "• Grid transmission losses decreased by 18%.\n"
+            "• Facility operations conform to IEEE 1547 interconnection standards."
+        )
+        res = verify_factual_grounding(SOLAR_GRID_SOURCE, output)
+        self.assertTrue(res["is_grounded"], f"Faithful presentation falsely ungrounded: {res}")
+        self.assertEqual(len(res["unsupported_claims"]), 0)
+        self.assertEqual(len(res["unverified_metrics"]), 0)
+
+    def test_presentation_invented_metric_rejected(self):
+        output = "Slide 3: Financial Returns\n• The microgrid yielded $24M in annual electrical savings for the municipality."
+        res = verify_factual_grounding(SOLAR_GRID_SOURCE, output)
+        self.assertFalse(res["is_grounded"])
+        self.assertTrue(len(res["unverified_metrics"]) > 0)
+
+    def test_presentation_invented_event_rejected(self):
+        output = "HelioGrid completed the acquisition of Arizona Solar Systems to scale desert operations."
+        res = verify_factual_grounding(SOLAR_GRID_SOURCE, output)
+        self.assertFalse(res["is_grounded"])
+        self.assertIn("acquisition", res["unsupported_events"])
+
+    def test_presentation_unsupported_causal_rejected(self):
+        output = "The photovoltaic microgrid installation guaranteed perpetual energy resilience across the entire state."
+        res = verify_factual_grounding(SOLAR_GRID_SOURCE, output)
+        self.assertFalse(res["is_grounded"])
+        self.assertGreaterEqual(len(res["unsupported_claims"]), 1)
+
+    # --- 5. VIDEO PACKAGE TESTS (using SOLAR_GRID_SOURCE) ---
+    def test_video_package_source_faithful_grounded(self):
+        output = (
+            "Video Production Package: HelioGrid Mojave Desert Microgrid\n"
+            "Video Objective: Inform stakeholders on facility launch and performance metrics.\n"
+            "Full Voiceover Script:\n"
+            "HelioGrid completed the installation of its smart photovoltaic microgrid at the Mojave Desert facility in August 2025. "
+            "During peak daylight hours, the 50-megawatt solar array met 85% of local auxiliary power demands while reducing grid transmission losses by 18%. "
+            "The facility utilizes lithium-iron-phosphate battery storage and conforms to IEEE 1547 interconnection standards.\n"
+            "Storyboard Breakdown:\n"
+            "Scene 1: Drone footage of Mojave Desert facility.\n"
+            "On-Screen Text: HelioGrid smart photovoltaic microgrid installed August 2025.\n"
+            "Scene 2: Graphic display of 50-megawatt array.\n"
+            "On-Screen Text: Met 85% of auxiliary power demands with 18% reduction in transmission losses."
+        )
+        res = verify_factual_grounding(SOLAR_GRID_SOURCE, output)
+        self.assertTrue(res["is_grounded"], f"Faithful video package falsely ungrounded: {res}")
+        self.assertEqual(len(res["unsupported_claims"]), 0)
+        self.assertEqual(len(res["unverified_metrics"]), 0)
+
+    def test_video_package_invented_metric_rejected(self):
+        output = "Scene 2 On-Screen Text: Microgrid reduced total facility operating costs by 62%."
+        res = verify_factual_grounding(SOLAR_GRID_SOURCE, output)
+        self.assertFalse(res["is_grounded"])
+        self.assertIn("62%", res["unverified_metrics"])
+
+    def test_video_package_invented_event_rejected(self):
+        output = "HelioGrid entered into an enterprise partnership with the Department of Defense to construct tactical microgrids."
+        res = verify_factual_grounding(SOLAR_GRID_SOURCE, output)
+        self.assertFalse(res["is_grounded"])
+        self.assertIn("partnership", res["unsupported_events"])
+
+    def test_video_package_unsupported_benefit_rejected(self):
+        output = "The solar microgrid deployment permanently solved climate disruption across the entire region."
+        res = verify_factual_grounding(SOLAR_GRID_SOURCE, output)
+        self.assertFalse(res["is_grounded"])
+        self.assertGreaterEqual(len(res["unsupported_claims"]), 1)
+
+
+
+class TestFeedbackAwareTargetedRecovery(unittest.TestCase):
+    """
+    Test suite for feedback-aware targeted recovery:
+    Verifies that grounding failures trigger targeted recovery,
+    recovery prompts contain explicit detected defects and previous drafts,
+    clean outputs do not trigger recovery, and non-critical warnings do not cause spurious recoveries.
+    """
+
+    def test_recovery_prompt_contains_detected_issues(self):
+        prompt = build_recovery_prompt(
+            source_content=CYBERSHIELD_SOURCE,
+            output_type="Executive Summary",
+            target_audience="C-Suite & Executive Leadership",
+            tone="Professional",
+            language="English",
+            detail_level="Detailed",
+            validation_issues=[
+                "Output contains unverified metric(s): $500M.",
+                "Output contains unsupported event(s): acquisition."
+            ],
+            previous_output="CyberShield acquired a German robotics startup and raised $500M.",
+            grounding_details={
+                "unverified_metrics": ["$500M"],
+                "unsupported_events": ["acquisition"],
+                "unsupported_entities": ["German robotics startup"],
+                "unsupported_claims": ["CyberShield acquired a German robotics startup and raised $500M."]
+            }
+        )
+        # Verify detected defects are explicitly injected into the prompt
+        self.assertIn("SPECIFIC DEFECTS & GROUNDING VIOLATIONS TO FIX:", prompt)
+        self.assertIn("$500M", prompt)
+        self.assertIn("acquisition", prompt)
+        self.assertIn("German robotics startup", prompt)
+        self.assertIn("UNVERIFIED METRIC(S) NOT IN SOURCE", prompt)
+        self.assertIn("UNSUPPORTED EVENT(S) NOT IN SOURCE", prompt)
+        self.assertIn("RECOVERY INSTRUCTIONS:", prompt)
+        self.assertIn("ELIMINATE all unverified metrics", prompt)
+
+    def test_recovery_prompt_includes_previous_draft(self):
+        draft_text = "Project CyberShield reported 99.4% intrusion mitigation and acquired a Munich firm."
+        prompt = build_recovery_prompt(
+            source_content=CYBERSHIELD_SOURCE,
+            output_type="Executive Summary",
+            target_audience="Engineering & Technical Teams",
+            tone="Professional",
+            language="English",
+            detail_level="Detailed",
+            previous_output=draft_text,
+            validation_issues=["Output contains unsupported event(s): acquisition."]
+        )
+        self.assertIn("PREVIOUS DRAFT (REJECTED DUE TO QUALITY / GROUNDING VIOLATIONS):", prompt)
+        self.assertIn(draft_text, prompt)
+
+    def test_recovery_prompt_handles_empty_previous_draft(self):
+        prompt = build_recovery_prompt(
+            source_content=CYBERSHIELD_SOURCE,
+            output_type="Advisory",
+            target_audience="General Audience",
+            tone="Professional",
+            language="English",
+            detail_level="Brief",
+            previous_output="",
+            validation_issues=["Output is missing or empty."]
+        )
+        self.assertIn("PREVIOUS DRAFT: [Missing or empty output from initial generation]", prompt)
+
+    def test_grounding_failure_triggers_recovery(self):
+        # Case A: Unverified metric
+        val_metric = {
+            "valid": True,
+            "severity": "warning",
+            "issues": ["Output contains unverified metric(s): 95%."],
+            "factual_grounding": {
+                "is_grounded": False,
+                "unverified_metrics": ["95%"],
+                "unsupported_events": [],
+                "unsupported_entities": [],
+                "unsupported_claims": []
+            }
+        }
+        self.assertTrue(should_trigger_recovery(val_metric))
+
+        # Case B: Unsupported corporate event
+        val_event = {
+            "valid": True,
+            "severity": "warning",
+            "issues": ["Output contains unsupported event(s): acquisition."],
+            "factual_grounding": {
+                "is_grounded": False,
+                "unverified_metrics": [],
+                "unsupported_events": ["acquisition"],
+                "unsupported_entities": [],
+                "unsupported_claims": []
+            }
+        }
+        self.assertTrue(should_trigger_recovery(val_event))
+
+        # Case C: Unsupported entity
+        val_entity = {
+            "valid": True,
+            "severity": "warning",
+            "issues": ["Output contains unsupported entity/fact(s): Munich Robotics."],
+            "factual_grounding": {
+                "is_grounded": False,
+                "unverified_metrics": [],
+                "unsupported_events": [],
+                "unsupported_entities": ["Munich Robotics"],
+                "unsupported_claims": []
+            }
+        }
+        self.assertTrue(should_trigger_recovery(val_entity))
+
+        # Case D: Unsupported claims
+        val_claims = {
+            "valid": True,
+            "severity": "warning",
+            "issues": ["Output contains 1 claim(s) unsupported by source content."],
+            "factual_grounding": {
+                "is_grounded": False,
+                "unverified_metrics": [],
+                "unsupported_events": [],
+                "unsupported_entities": [],
+                "unsupported_claims": ["The system achieved complete planetary dominance."]
+            }
+        }
+        self.assertTrue(should_trigger_recovery(val_claims))
+
+    def test_structural_error_triggers_recovery(self):
+        # Structural error (e.g. empty output or missing slide breakdown)
+        val_structural = {
+            "valid": False,
+            "severity": "error",
+            "issues": ["Presentation lacks slide-by-slide structure or speaker notes."],
+            "factual_grounding": {"is_grounded": True}
+        }
+        self.assertTrue(should_trigger_recovery(val_structural))
+
+    def test_clean_grounded_output_does_not_trigger_recovery(self):
+        val_clean = {
+            "valid": True,
+            "severity": "none",
+            "issues": [],
+            "factual_grounding": {
+                "is_grounded": True,
+                "unverified_metrics": [],
+                "unsupported_events": [],
+                "unsupported_entities": [],
+                "unsupported_claims": []
+            }
+        }
+        self.assertFalse(should_trigger_recovery(val_clean))
+
+    def test_non_critical_warning_does_not_trigger_recovery(self):
+        # Configuration warning (e.g., detail level mismatch or minor formatting)
+        val_warning = {
+            "valid": True,
+            "severity": "warning",
+            "issues": ["Output length significantly exceeds requested 'Brief' detail level."],
+            "factual_grounding": {
+                "is_grounded": True,
+                "unverified_metrics": [],
+                "unsupported_events": [],
+                "unsupported_entities": [],
+                "unsupported_claims": []
+            }
+        }
+        self.assertFalse(
+            should_trigger_recovery(val_warning),
+            "Non-critical configuration warning should NOT trigger recovery"
+        )
+
+    def test_validate_and_recover_outputs_calls_recovery_on_grounding_failure(self):
+        # Initial ungrounded output with fabricated 95% metric
+        initial_outputs = {
+            "Executive Summary": (
+                "Executive Overview:\n"
+                "Project CyberShield automated detection reduced threat response times by 95%.\n"
+                "Strategic Pillars:\n"
+                "Real-time anomaly detection and continuous posture management.\n"
+                "Key Takeaways:\n"
+                "Received SOC2 Type II certification and ISO/IEC 27001 compliance."
+            )
+        }
+        request = TransformRequest(
+            source_content=CYBERSHIELD_SOURCE,
+            output_types=["Executive Summary"]
+        )
+
+        # Mock model that returns a clean, fully grounded output upon recovery
+        mock_model = MagicMock()
+        mock_response = MagicMock()
+        mock_response.text = (
+            "Executive Overview:\n"
+            "Project CyberShield automated detection reduced threat response times by 68%.\n"
+            "Key Pillars:\n"
+            "Real-time anomaly detection and continuous posture management.\n"
+            "Key Takeaways:\n"
+            "The platform has received SOC2 Type II certification and adheres to ISO/IEC 27001 standards."
+        )
+        mock_model.generate_content.return_value = mock_response
+
+        final_outputs, val_report = validate_and_recover_outputs(
+            outputs=initial_outputs,
+            request=request,
+            model=mock_model,
+            multimodal_parts=[]
+        )
+
+        # Verify targeted recovery was triggered and executed
+        self.assertEqual(val_report["recovered_count"], 1)
+        self.assertIn("Executive Summary", val_report["recovered_formats"])
+        # Verify the mock model was called for targeted recovery
+        mock_model.generate_content.assert_called_once()
+        # Verify the prompt passed to the model was feedback-aware
+        call_args = mock_model.generate_content.call_args[0][0]
+        prompt_sent = call_args if isinstance(call_args, str) else call_args[0]
+        self.assertIn("SPECIFIC DEFECTS & GROUNDING VIOLATIONS TO FIX:", prompt_sent)
+        self.assertIn("95%", prompt_sent)
+
+        # Verify output was updated with the recovered version
+        self.assertIn("68%", final_outputs["Executive Summary"])
+        # Verify recovered output is now grounded
+        exec_val = val_report["per_output"]["Executive Summary"]
+        self.assertTrue(exec_val["factual_grounding"]["is_grounded"])
+
+    def test_validate_and_recover_outputs_skips_recovery_for_clean_outputs(self):
+        # Initial clean output
+        initial_outputs = {
+            "Executive Summary": (
+                "Executive Overview:\n"
+                "Project CyberShield automated detection reduced threat response times by 68%.\n"
+                "Key Pillars:\n"
+                "Real-time anomaly detection and continuous posture management.\n"
+                "Key Takeaways:\n"
+                "The platform has received SOC2 Type II certification and adheres to ISO/IEC 27001 standards."
+            )
+        }
+        request = TransformRequest(
+            source_content=CYBERSHIELD_SOURCE,
+            output_types=["Executive Summary"]
+        )
+        mock_model = MagicMock()
+
+        final_outputs, val_report = validate_and_recover_outputs(
+            outputs=initial_outputs,
+            request=request,
+            model=mock_model,
+            multimodal_parts=[]
+        )
+
+        # Clean output should NOT trigger recovery
+        self.assertEqual(val_report["recovered_count"], 0)
+        self.assertEqual(val_report["recovered_formats"], [])
+        mock_model.generate_content.assert_not_called()
+
+
+class TestTwitterFormatValidation(unittest.TestCase):
+    """
+    Test suite for Twitter/X Post format validation:
+    Verifies valid outputs pass, overlong posts and segments are detected,
+    missing/malformed hashtags are detected, invented metrics/events are flagged,
+    and clean grounded outputs do not trigger unnecessary recovery.
+    """
+
+    def test_valid_source_faithful_twitter_output_passes(self):
+        # Single tweet under 280 characters with hashtags and grounded facts
+        output_single = (
+            "Project CyberShield automated detection reduced threat response times by 68%, "
+            "mitigating 99.4% of simulated intrusions during internal pilot testing. #CyberShield #ZeroTrust"
+        )
+        val_single = validate_output(
+            output_type="Twitter/X Post",
+            output_text=output_single,
+            source_content=CYBERSHIELD_SOURCE
+        )
+        self.assertTrue(val_single["valid"])
+        self.assertEqual(len(val_single["issues"]), 0, f"Unexpected issues in valid tweet: {val_single['issues']}")
+        self.assertTrue(val_single["factual_grounding"]["is_grounded"])
+
+        # Thread with 2 segments under 280 characters each with hashtags
+        output_thread = (
+            "1/2: Project CyberShield automated detection reduced threat response times by 68% in Q1 2026 pilot tests.\n"
+            "2/2: The framework mitigated 99.4% of simulated intrusions before lateral movement occurred. #CyberShield"
+        )
+        val_thread = validate_output(
+            output_type="Twitter/X Post",
+            output_text=output_thread,
+            source_content=CYBERSHIELD_SOURCE
+        )
+        self.assertTrue(val_thread["valid"])
+        self.assertEqual(len(val_thread["issues"]), 0, f"Unexpected issues in valid thread: {val_thread['issues']}")
+        self.assertTrue(val_thread["factual_grounding"]["is_grounded"])
+
+    def test_overlong_single_twitter_output_detected(self):
+        # Single unthreaded post exceeding 280 characters
+        output_overlong = (
+            "Project CyberShield is an enterprise cybersecurity framework initiated in Q1 2026 to safeguard cloud "
+            "infrastructure, identify zero-day vulnerabilities, and ensure zero-trust compliance across distributed "
+            "multi-cloud environments. During internal pilot testing, automated detection reduced threat response "
+            "times by 68%, mitigating 99.4% of simulated intrusions. #CyberShield"
+        )
+        self.assertGreater(len(output_overlong), 280)
+        val = validate_output(
+            output_type="Twitter/X Post",
+            output_text=output_overlong,
+            source_content=CYBERSHIELD_SOURCE
+        )
+        self.assertTrue(any("exceeds 280-character" in issue for issue in val["issues"]))
+
+    def test_overlong_thread_segment_detected(self):
+        # Thread where second segment exceeds 280 characters
+        long_body = "During internal pilot testing, automated detection reduced threat response times by 68%, mitigating 99.4% of simulated intrusions before lateral movement occurred across all environments. " * 2
+        output_overlong_thread = (
+            "1/2: CyberShield reduced response times by 68%. #CyberShield\n"
+            f"2/2: {long_body} #ZeroTrust"
+        )
+        val = validate_output(
+            output_type="Twitter/X Post",
+            output_text=output_overlong_thread,
+            source_content=CYBERSHIELD_SOURCE
+        )
+        self.assertTrue(any("exceeding the 280-character limit" in issue for issue in val["issues"]))
+
+    def test_missing_hashtag_formatting_detected(self):
+        # Output lacking any hashtag
+        output_no_hashtag = (
+            "Project CyberShield automated detection reduced threat response times by 68%, "
+            "mitigating 99.4% of intrusions in pilot tests."
+        )
+        val = validate_output(
+            output_type="Twitter/X Post",
+            output_text=output_no_hashtag,
+            source_content=CYBERSHIELD_SOURCE
+        )
+        self.assertTrue(any("missing required hashtags" in issue.lower() for issue in val["issues"]))
+
+    def test_malformed_hashtag_formatting_detected(self):
+        # Output with markdown header but no actual hashtags
+        output_malformed = (
+            "### Project CyberShield Update\n"
+            "Automated detection reduced threat response times by 68% in pilot tests. Tag: #"
+        )
+        val = validate_output(
+            output_type="Twitter/X Post",
+            output_text=output_malformed,
+            source_content=CYBERSHIELD_SOURCE
+        )
+        self.assertTrue(any("missing required hashtags" in issue.lower() for issue in val["issues"]))
+
+    def test_invented_metric_still_detected_as_grounding_failure(self):
+        # Twitter post with invented 99.9% metric
+        output_invented_metric = (
+            "Project CyberShield eliminated 99.9% of all corporate network intrusions. #CyberShield"
+        )
+        val = validate_output(
+            output_type="Twitter/X Post",
+            output_text=output_invented_metric,
+            source_content=CYBERSHIELD_SOURCE
+        )
+        self.assertFalse(val["factual_grounding"]["is_grounded"])
+        self.assertIn("99.9%", val["factual_grounding"]["unverified_metrics"])
+        # Should trigger recovery because of critical grounding failure
+        self.assertTrue(should_trigger_recovery(val))
+
+    def test_invented_event_still_detected_as_grounding_failure(self):
+        # Twitter post with invented corporate acquisition
+        output_invented_event = (
+            "Project CyberShield finalized the acquisition of a German security firm. #CyberShield"
+        )
+        val = validate_output(
+            output_type="Twitter/X Post",
+            output_text=output_invented_event,
+            source_content=CYBERSHIELD_SOURCE
+        )
+        self.assertFalse(val["factual_grounding"]["is_grounded"])
+        self.assertIn("acquisition", val["factual_grounding"]["unsupported_events"])
+        # Should trigger recovery because of critical grounding failure
+        self.assertTrue(should_trigger_recovery(val))
+
+    def test_clean_grounded_twitter_output_does_not_trigger_unnecessary_recovery(self):
+        # Clean, compliant Twitter post
+        output_clean = (
+            "Project CyberShield automated detection reduced threat response times by 68% in pilot tests. #CyberShield"
+        )
+        val = validate_output(
+            output_type="Twitter/X Post",
+            output_text=output_clean,
+            source_content=CYBERSHIELD_SOURCE
+        )
+        self.assertTrue(val["valid"])
+        self.assertTrue(val["factual_grounding"]["is_grounded"])
+        self.assertEqual(len(val["issues"]), 0)
+        self.assertFalse(should_trigger_recovery(val))
+
+
+class TestFrenchAndGermanLanguageValidation(unittest.TestCase):
+    """
+    Test suite for French and German language validation in validate_output:
+    Verifies valid French and German outputs pass without language warnings,
+    and English leakage is correctly detected when French or German is requested.
+    """
+
+    def test_valid_french_output_passes(self):
+        french_output = (
+            "Résumé Exécutif:\n"
+            "Le projet CyberShield est un cadre de cybersécurité pour protéger l'infrastructure infonuagique. "
+            "La détection automatisée a réduit les temps de réponse de 68% pendant les tests pilotes. "
+            "La plateforme a obtenu la certification SOC2 Type II et respecte les normes ISO/IEC 27001."
+        )
+        val = validate_output(
+            output_type="Executive Summary",
+            output_text=french_output,
+            source_content=CYBERSHIELD_SOURCE,
+            language="French"
+        )
+        language_issues = [i for i in val["issues"] if "language" in i.lower() or "french" in i.lower()]
+        self.assertEqual(len(language_issues), 0, f"Unexpected language issue in valid French output: {language_issues}")
+
+    def test_english_leakage_in_french_output_detected(self):
+        english_output = (
+            "Executive Summary Overview:\n"
+            "Project CyberShield automated detection reduced threat response times by 68%. "
+            "The platform has received SOC2 Type II certification."
+        )
+        val = validate_output(
+            output_type="Executive Summary",
+            output_text=english_output,
+            source_content=CYBERSHIELD_SOURCE,
+            language="French"
+        )
+        self.assertTrue(
+            any("rather than requested language 'French'" in issue for issue in val["issues"]),
+            f"Expected French language leakage warning, got issues: {val['issues']}"
+        )
+
+    def test_valid_german_output_passes(self):
+        german_output = (
+            "Zusammenfassung:\n"
+            "Das Projekt CyberShield ist ein Sicherheitsframework zum Schutz der Cloud-Infrastruktur. "
+            "Die automatisierte Erkennung reduzierte die Reaktionszeiten bei internen Pilottests um 68%. "
+            "Die Plattform erfüllt die Normen von ISO/IEC 27001 und erhielt die SOC2-Zertifizierung."
+        )
+        val = validate_output(
+            output_type="Executive Summary",
+            output_text=german_output,
+            source_content=CYBERSHIELD_SOURCE,
+            language="German"
+        )
+        language_issues = [i for i in val["issues"] if "language" in i.lower() or "german" in i.lower()]
+        self.assertEqual(len(language_issues), 0, f"Unexpected language issue in valid German output: {language_issues}")
+
+    def test_english_leakage_in_german_output_detected(self):
+        english_output = (
+            "Executive Summary Overview:\n"
+            "Project CyberShield automated detection reduced threat response times by 68%. "
+            "The platform has received SOC2 Type II certification."
+        )
+        val = validate_output(
+            output_type="Executive Summary",
+            output_text=english_output,
+            source_content=CYBERSHIELD_SOURCE,
+            language="German"
+        )
+        self.assertTrue(
+            any("rather than requested language 'German'" in issue for issue in val["issues"]),
+            f"Expected German language leakage warning, got issues: {val['issues']}"
+        )
+
+
+class TestPresentationFormatValidation(unittest.TestCase):
+    """
+    Dedicated test suite for Presentation format-specific validation in validate_output():
+    - Valid 4-6 slide presentation with headers, bullets, and speaker notes
+    - Too few slides (< 4 slides)
+    - Generic text mentioning slides/speaker-notes rejected as false positive
+    - Missing speaker notes / content
+    - Clean valid presentation does not trigger recovery unnecessarily
+    """
+
+    def test_valid_presentation_output_passes(self):
+        # Faithful 4-slide presentation matching specification
+        valid_presentation = (
+            "Slide 1: Title & Framework Overview\n"
+            "• Project CyberShield is an enterprise cybersecurity framework initiated in Q1 2026.\n"
+            "• Safeguards cloud infrastructure across distributed multi-cloud environments.\n"
+            "• Ensures zero-trust compliance and identifies zero-day vulnerabilities.\n"
+            "• Speaker Notes: Welcome everyone. Today we are presenting Project CyberShield, initiated in Q1 2026.\n\n"
+            "Slide 2: Pilot Testing Performance\n"
+            "• Automated detection reduced threat response times by 68% during internal pilot testing.\n"
+            "• Mitigated 99.4% of simulated intrusions before lateral movement occurred.\n"
+            "• Speaker Notes: Emphasize the measured 68% reduction in threat response times.\n\n"
+            "Slide 3: Core Architectural Pillars\n"
+            "• Key pillars include real-time anomaly detection and automated policy enforcement.\n"
+            "• Features continuous posture management and seamless CI/CD security scanning.\n"
+            "• Speaker Notes: Walk through the four architectural pillars safeguarding infrastructure.\n\n"
+            "Slide 4: Compliance & Certifications\n"
+            "• The platform has received SOC2 Type II certification.\n"
+            "• Framework adheres to ISO/IEC 27001 standards.\n"
+            "• Speaker Notes: Reassure stakeholders of full SOC2 Type II and ISO/IEC 27001 adherence."
+        )
+        val = validate_output(
+            output_type="Presentation",
+            output_text=valid_presentation,
+            source_content=CYBERSHIELD_SOURCE
+        )
+        self.assertTrue(val["valid"], f"Valid presentation marked invalid: {val}")
+        self.assertEqual(val["severity"], "none")
+        self.assertEqual(len(val["issues"]), 0, f"Unexpected issues in valid presentation: {val['issues']}")
+        self.assertTrue(val["factual_grounding"]["is_grounded"])
+
+    def test_presentation_too_few_slides_detected(self):
+        # Presentation with only 2 slides (specification requires 4-6 slides)
+        two_slide_presentation = (
+            "Slide 1: Title & Framework Overview\n"
+            "• Project CyberShield is an enterprise cybersecurity framework initiated in Q1 2026.\n"
+            "• Speaker Notes: Present the framework overview.\n\n"
+            "Slide 2: Pilot Testing Performance\n"
+            "• Automated detection reduced threat response times by 68%.\n"
+            "• Speaker Notes: Present measured pilot response times."
+        )
+        val = validate_output(
+            output_type="Presentation",
+            output_text=two_slide_presentation,
+            source_content=CYBERSHIELD_SOURCE
+        )
+        self.assertTrue(
+            any("only 2 slide" in issue.lower() or "4–6" in issue or "4-6" in issue for issue in val["issues"]),
+            f"Expected slide count issue, got: {val['issues']}"
+        )
+
+    def test_generic_text_mentioning_slides_rejected(self):
+        # Paragraph mentioning "slides" and "speaker notes" but lacking presentation slide markers
+        generic_text = (
+            "During the executive briefing, our team reviewed several slides describing the cloud cybersecurity project. "
+            "The speaker notes outlined key findings and incident response times, but more cross-functional analysis is needed."
+        )
+        val = validate_output(
+            output_type="Presentation",
+            output_text=generic_text,
+            source_content=CYBERSHIELD_SOURCE
+        )
+        self.assertFalse(val["valid"], "Generic text falsely passed as a valid presentation")
+        self.assertEqual(val["severity"], "error")
+        self.assertTrue(
+            any("lacks slide-by-slide structure" in issue.lower() for issue in val["issues"]),
+            f"Expected slide structure error, got: {val['issues']}"
+        )
+        self.assertTrue(should_trigger_recovery(val), "Structural failure should trigger recovery")
+
+    def test_presentation_missing_speaker_notes_detected(self):
+        # 4 slides with bullet points but no speaker notes
+        no_notes_presentation = (
+            "Slide 1: Title & Overview\n"
+            "• Project CyberShield initiated in Q1 2026.\n\n"
+            "Slide 2: Architecture\n"
+            "• Automated policy enforcement and posture management.\n\n"
+            "Slide 3: Performance\n"
+            "• Threat response times reduced by 68%.\n\n"
+            "Slide 4: Certifications\n"
+            "• Platform received SOC2 Type II certification.\n"
+        )
+        val = validate_output(
+            output_type="Presentation",
+            output_text=no_notes_presentation,
+            source_content=CYBERSHIELD_SOURCE
+        )
+        self.assertTrue(
+            any("speaker notes" in issue.lower() for issue in val["issues"]),
+            f"Expected missing speaker notes issue, got: {val['issues']}"
+        )
+
+    def test_presentation_missing_bullet_points_detected(self):
+        # 4 slides with headers and speaker notes but no bullet points
+        no_bullets_presentation = (
+            "Slide 1: Title & Overview\n"
+            "Speaker Notes: Welcome everyone to the presentation.\n\n"
+            "Slide 2: Architecture\n"
+            "Speaker Notes: Discuss policy enforcement.\n\n"
+            "Slide 3: Performance\n"
+            "Speaker Notes: Review response times.\n\n"
+            "Slide 4: Certifications\n"
+            "Speaker Notes: Conclude with certifications.\n"
+        )
+        val = validate_output(
+            output_type="Presentation",
+            output_text=no_bullets_presentation,
+            source_content=CYBERSHIELD_SOURCE
+        )
+        self.assertTrue(
+            any("bullet points" in issue.lower() or "slide content" in issue.lower() for issue in val["issues"]),
+            f"Expected missing bullet points issue, got: {val['issues']}"
+        )
+
+    def test_clean_valid_presentation_does_not_trigger_unnecessary_recovery(self):
+        # Clean grounded 4-slide presentation with speaker notes
+        clean_presentation = (
+            "Slide 1: Title & Framework Overview\n"
+            "• Project CyberShield is an enterprise cybersecurity framework initiated in Q1 2026.\n"
+            "• Safeguards cloud infrastructure across distributed multi-cloud environments.\n"
+            "• Speaker Notes: Welcome everyone to the presentation.\n\n"
+            "Slide 2: Pilot Testing Performance\n"
+            "• Automated detection reduced threat response times by 68% during internal pilot testing.\n"
+            "• Mitigated 99.4% of simulated intrusions before lateral movement occurred.\n"
+            "• Speaker Notes: Detail the measured response time reduction.\n\n"
+            "Slide 3: Core Architectural Pillars\n"
+            "• Key pillars include real-time anomaly detection and automated policy enforcement.\n"
+            "• Features continuous posture management and seamless CI/CD security scanning.\n"
+            "• Speaker Notes: Explain the security pillars.\n\n"
+            "Slide 4: Compliance & Certifications\n"
+            "• The platform has received SOC2 Type II certification.\n"
+            "• Framework adheres to ISO/IEC 27001 standards.\n"
+            "• Speaker Notes: Conclude with certifications and open for questions."
+        )
+        val = validate_output(
+            output_type="Presentation",
+            output_text=clean_presentation,
+            source_content=CYBERSHIELD_SOURCE
+        )
+        self.assertTrue(val["valid"])
+        self.assertEqual(val["severity"], "none")
+        self.assertEqual(len(val["issues"]), 0, f"Unexpected issues in clean presentation: {val['issues']}")
+        self.assertTrue(val["factual_grounding"]["is_grounded"])
+        self.assertFalse(should_trigger_recovery(val), "Clean valid presentation should not trigger recovery")
+
+
+class TestExecutiveSummaryFormatValidation(unittest.TestCase):
+    """
+    Dedicated test suite for Executive Summary format-specific validation in validate_output():
+    - Valid multi-section Executive Summary (>= 2 recognized structural categories)
+    - Generic prose mentioning keywords rejected / flagged
+    - Incomplete Executive Summary with only 1 structural category flagged
+    - Executive Summary with Overview + Findings passes
+    - Executive Summary with Recommendations + Takeaways passes
+    - Clean valid Executive Summary does not trigger recovery unnecessarily
+    """
+
+    def test_valid_executive_summary_output_passes(self):
+        # Valid Executive Summary with Overview, Findings/Impact, and Recommendations
+        valid_summary = (
+            "Executive Overview:\n"
+            "Project CyberShield is an enterprise cybersecurity framework initiated in Q1 2026 to "
+            "safeguard cloud infrastructure across distributed multi-cloud environments.\n\n"
+            "Key Findings & Measured Impact:\n"
+            "During internal pilot testing, automated detection reduced threat response times by 68%, "
+            "mitigating 99.4% of simulated intrusions before lateral movement occurred.\n\n"
+            "Strategic Recommendations:\n"
+            "Maintain continuous posture management and adhere to ISO/IEC 27001 standards."
+        )
+        val = validate_output(
+            output_type="Executive Summary",
+            output_text=valid_summary,
+            source_content=CYBERSHIELD_SOURCE
+        )
+        self.assertTrue(val["valid"], f"Valid Executive Summary marked invalid: {val}")
+        self.assertEqual(val["severity"], "none")
+        self.assertEqual(len(val["issues"]), 0, f"Unexpected issues in valid Executive Summary: {val['issues']}")
+        self.assertTrue(val["factual_grounding"]["is_grounded"])
+
+    def test_generic_text_mentioning_summary_rejected(self):
+        # Running paragraph containing keywords without actual structural sections
+        generic_text = "In summary, the project had an impact and several findings were discussed."
+        val = validate_output(
+            output_type="Executive Summary",
+            output_text=generic_text,
+            source_content=CYBERSHIELD_SOURCE
+        )
+        self.assertTrue(
+            any("lacks multi-section structure" in issue.lower() or "structural" in issue.lower() for issue in val["issues"]),
+            f"Expected multi-section structure issue, got: {val['issues']}"
+        )
+        self.assertEqual(val["severity"], "warning")
+
+    def test_executive_summary_missing_structural_sections_detected(self):
+        # Only 1 structural category (Overview only)
+        one_section_summary = (
+            "Executive Overview:\n"
+            "Project CyberShield was initiated in Q1 2026 to safeguard cloud infrastructure. "
+            "Automated detection reduced threat response times by 68% during internal pilot testing."
+        )
+        val = validate_output(
+            output_type="Executive Summary",
+            output_text=one_section_summary,
+            source_content=CYBERSHIELD_SOURCE
+        )
+        self.assertTrue(
+            any("only 1 structural component" in issue.lower() or "requires at least two" in issue.lower() for issue in val["issues"]),
+            f"Expected missing structural section issue, got: {val['issues']}"
+        )
+
+    def test_executive_summary_with_overview_and_findings_passes(self):
+        # Two valid categories: Overview/Context and Findings/Impact
+        overview_findings = (
+            "## Context & Background\n"
+            "Project CyberShield is an enterprise cybersecurity framework initiated in Q1 2026.\n\n"
+            "## Key Findings\n"
+            "Automated detection reduced threat response times by 68% in pilot tests, mitigating 99.4% of intrusions."
+        )
+        val = validate_output(
+            output_type="Executive Summary",
+            output_text=overview_findings,
+            source_content=CYBERSHIELD_SOURCE
+        )
+        self.assertTrue(val["valid"])
+        self.assertEqual(val["severity"], "none")
+        self.assertEqual(len(val["issues"]), 0, f"Unexpected issues: {val['issues']}")
+        self.assertTrue(val["factual_grounding"]["is_grounded"])
+
+    def test_executive_summary_with_recommendations_and_takeaways_passes(self):
+        # Two valid categories: Findings/Impact (Takeaways) and Action (Action Items)
+        takeaways_actions = (
+            "Key Takeaways:\n"
+            "Automated detection reduced threat response times by 68%, mitigating 99.4% of simulated intrusions.\n\n"
+            "Action Items:\n"
+            "Maintain continuous posture management and enforce ISO/IEC 27001 standards."
+        )
+        val = validate_output(
+            output_type="Executive Summary",
+            output_text=takeaways_actions,
+            source_content=CYBERSHIELD_SOURCE
+        )
+        self.assertTrue(val["valid"])
+        self.assertEqual(val["severity"], "none")
+        self.assertEqual(len(val["issues"]), 0, f"Unexpected issues: {val['issues']}")
+        self.assertTrue(val["factual_grounding"]["is_grounded"])
+
+    def test_clean_valid_executive_summary_does_not_trigger_unnecessary_recovery(self):
+        # Clean, grounded, structurally valid output
+        clean_summary = (
+            "Executive Overview:\n"
+            "Project CyberShield is an enterprise cybersecurity framework initiated in Q1 2026.\n\n"
+            "Key Findings:\n"
+            "Automated detection reduced threat response times by 68% during pilot testing, mitigating 99.4% of intrusions.\n\n"
+            "Recommended Actions:\n"
+            "Maintain SOC2 Type II certification and adherence to ISO/IEC 27001 standards."
+        )
+        val = validate_output(
+            output_type="Executive Summary",
+            output_text=clean_summary,
+            source_content=CYBERSHIELD_SOURCE
+        )
+        self.assertTrue(val["valid"])
+        self.assertEqual(val["severity"], "none")
+        self.assertEqual(len(val["issues"]), 0, f"Unexpected issues: {val['issues']}")
+        self.assertTrue(val["factual_grounding"]["is_grounded"])
+        self.assertFalse(should_trigger_recovery(val), "Clean valid Executive Summary should not trigger recovery")
+
+
+class TestAdvisoryFormatValidation(unittest.TestCase):
+    """
+    Dedicated test suite for Advisory format-specific validation in validate_output():
+    - Valid advisory with both Risk/Context and Directive/Guidance components passes
+    - Generic prose mentioning keywords is flagged
+    - Advisory with Risk/Context only is flagged as incomplete
+    - Advisory with Directive/Guidance only is flagged as incomplete
+    - Clean valid advisory does not trigger recovery unnecessarily
+    """
+
+    def test_valid_advisory_output_passes(self):
+        # Valid advisory with both Risk/Context and Directive/Guidance, grounded in source
+        valid_advisory = (
+            "Context & Risk Analysis:\n"
+            "Project CyberShield is an enterprise cybersecurity framework initiated in Q1 2026 to "
+            "safeguard cloud infrastructure across distributed multi-cloud environments. "
+            "During internal pilot testing, automated detection reduced threat response times by 68%, "
+            "mitigating 99.4% of simulated intrusions before lateral movement occurred.\n\n"
+            "Mandatory Directives & Guidance:\n"
+            "1. Enforce automated policy enforcement across CI/CD pipelines.\n"
+            "2. Adhere to ISO/IEC 27001 standards and maintain SOC2 Type II compliance."
+        )
+        val = validate_output(
+            output_type="Advisory",
+            output_text=valid_advisory,
+            source_content=CYBERSHIELD_SOURCE
+        )
+        self.assertTrue(val["valid"], f"Valid Advisory marked invalid: {val}")
+        self.assertEqual(val["severity"], "none")
+        self.assertEqual(len(val["issues"]), 0, f"Unexpected issues in valid Advisory: {val['issues']}")
+        self.assertTrue(val["factual_grounding"]["is_grounded"])
+
+    def test_generic_text_mentioning_advisory_keywords_flagged(self):
+        # Generic running prose mentioning keywords without actual structural sections
+        generic_prose = "In this update, the risk was evaluated, the impact was discussed, and several action items were considered."
+        val = validate_output(
+            output_type="Advisory",
+            output_text=generic_prose,
+            source_content=CYBERSHIELD_SOURCE
+        )
+        self.assertTrue(
+            any("lacks clear risk/context framing and directive/guidance structure" in issue.lower() or "structure" in issue.lower() for issue in val["issues"]),
+            f"Expected structure issue for generic prose, got: {val['issues']}"
+        )
+        self.assertEqual(val["severity"], "warning")
+
+    def test_advisory_risk_context_only_flagged(self):
+        # Contains Risk/Context only, missing Directive/Guidance
+        risk_only = (
+            "Context & Risk Analysis:\n"
+            "Project CyberShield safeguards cloud infrastructure against zero-day vulnerabilities. "
+            "During pilot testing, automated detection reduced threat response times by 68%."
+        )
+        val = validate_output(
+            output_type="Advisory",
+            output_text=risk_only,
+            source_content=CYBERSHIELD_SOURCE
+        )
+        self.assertTrue(
+            any("lacks actionable directives or guidance" in issue.lower() or "directives" in issue.lower() for issue in val["issues"]),
+            f"Expected missing directives issue, got: {val['issues']}"
+        )
+        self.assertEqual(val["severity"], "warning")
+
+    def test_advisory_directive_guidance_only_flagged(self):
+        # Contains Directive/Guidance only, missing Risk/Context
+        directive_only = (
+            "Mandatory Directives:\n"
+            "1. Enforce automated policy enforcement across distributed multi-cloud environments.\n"
+            "2. Adhere to ISO/IEC 27001 standards and verify SOC2 Type II compliance."
+        )
+        val = validate_output(
+            output_type="Advisory",
+            output_text=directive_only,
+            source_content=CYBERSHIELD_SOURCE
+        )
+        self.assertTrue(
+            any("lacks risk analysis or context framing" in issue.lower() or "risk" in issue.lower() for issue in val["issues"]),
+            f"Expected missing risk framing issue, got: {val['issues']}"
+        )
+        self.assertEqual(val["severity"], "warning")
+
+    def test_clean_valid_advisory_does_not_trigger_unnecessary_recovery(self):
+        # Clean grounded advisory with both components
+        clean_advisory = (
+            "Threat Context & Risk Impact:\n"
+            "Project CyberShield was initiated in Q1 2026 to safeguard cloud infrastructure. "
+            "Automated detection reduced threat response times by 68% during internal pilot testing.\n\n"
+            "Recommended Guidance & Action Required:\n"
+            "1. Implement continuous posture management and automated policy enforcement.\n"
+            "2. Ensure adherence to ISO/IEC 27001 standards."
+        )
+        val = validate_output(
+            output_type="Advisory",
+            output_text=clean_advisory,
+            source_content=CYBERSHIELD_SOURCE
+        )
+        self.assertTrue(val["valid"])
+        self.assertEqual(val["severity"], "none")
+        self.assertEqual(len(val["issues"]), 0, f"Unexpected issues in clean advisory: {val['issues']}")
+        self.assertTrue(val["factual_grounding"]["is_grounded"])
+        self.assertFalse(should_trigger_recovery(val), "Clean valid Advisory should not trigger recovery")
+
+
+class TestInfographicFormatValidation(unittest.TestCase):
+    """
+    Dedicated test suite for Infographic format-specific validation in validate_output():
+    - Valid infographic blueprint with both Visual/Layout and Data/Content components passes
+    - Generic prose mentioning keywords is flagged
+    - Infographic with Visual/Layout only is flagged as incomplete
+    - Infographic with Data/Metrics only is flagged as incomplete
+    - Clean valid infographic does not trigger recovery unnecessarily
+    """
+
+    def test_valid_infographic_blueprint_passes(self):
+        # Valid infographic blueprint with visual recommendations and data callouts
+        valid_infographic = (
+            "Infographic Blueprint: Project CyberShield Framework\n\n"
+            "Core Key Message:\n"
+            "Project CyberShield safeguards cloud infrastructure across distributed multi-cloud environments.\n\n"
+            "Key Data & Metric Callouts:\n"
+            "• Pilot Threat Response: 68% reduction in threat response times.\n"
+            "• Intrusion Mitigation: 99.4% of simulated intrusions mitigated before lateral movement.\n\n"
+            "Sectional Narrative Flow:\n"
+            "• Section 1: Overview and zero-trust framework objectives.\n"
+            "• Section 2: Real-time anomaly detection and automated policy enforcement.\n"
+            "• Section 3: SOC2 Type II certification and ISO/IEC 27001 compliance.\n\n"
+            "Layout & Visual Recommendations:\n"
+            "• Visual Layout: Top banner header with metric cards and narrative flow.\n"
+            "• Recommended Color Palette: Modern dark slate with indigo accents.\n"
+            "• Icon Suggestions: Shield icon for zero-trust compliance, checkmark for certifications."
+        )
+        val = validate_output(
+            output_type="Infographic",
+            output_text=valid_infographic,
+            source_content=CYBERSHIELD_SOURCE
+        )
+        self.assertTrue(val["valid"], f"Valid Infographic marked invalid: {val}")
+        self.assertEqual(val["severity"], "none")
+        self.assertEqual(len(val["issues"]), 0, f"Unexpected issues in valid Infographic: {val['issues']}")
+        self.assertTrue(val["factual_grounding"]["is_grounded"])
+
+    def test_generic_prose_infographic_keywords_flagged(self):
+        # Generic running prose mentioning keywords without actual structural sections
+        generic_prose = "In this section, the visual design illustrates key metrics for the infographic and highlights overall performance."
+        val = validate_output(
+            output_type="Infographic",
+            output_text=generic_prose,
+            source_content=CYBERSHIELD_SOURCE
+        )
+        self.assertTrue(
+            any("lacks visual/layout recommendations and sectional data" in issue.lower() or "visual" in issue.lower() for issue in val["issues"]),
+            f"Expected structure issue for generic prose, got: {val['issues']}"
+        )
+        self.assertEqual(val["severity"], "warning")
+
+    def test_infographic_layout_visual_only_flagged(self):
+        # Contains Layout/Visual recommendations only, missing sectional data/metric callouts
+        visual_only = (
+            "Layout & Visual Recommendations:\n"
+            "• Visual Layout: Header banner with 3-column split layout and narrative footer.\n"
+            "• Recommended Color Palette: Dark slate with cobalt blue accents.\n"
+            "• Icon Suggestions: Shield icon for cybersecurity framework."
+        )
+        val = validate_output(
+            output_type="Infographic",
+            output_text=visual_only,
+            source_content=CYBERSHIELD_SOURCE
+        )
+        self.assertTrue(
+            any("lacks sectional stat/metric callouts" in issue.lower() or "data" in issue.lower() for issue in val["issues"]),
+            f"Expected missing data/metric callout issue, got: {val['issues']}"
+        )
+        self.assertEqual(val["severity"], "warning")
+
+    def test_infographic_metrics_data_only_flagged(self):
+        # Contains Sectional stat/metric callouts only, missing layout/visual recommendations
+        data_only = (
+            "Key Data & Metric Callouts:\n"
+            "• Pilot Performance: 68% reduction in threat response times.\n"
+            "• Mitigation Rate: 99.4% of simulated intrusions prevented before lateral movement.\n\n"
+            "Sectional Breakdown:\n"
+            "• Section 1: Pilot testing metrics.\n"
+            "• Section 2: Framework architecture."
+        )
+        val = validate_output(
+            output_type="Infographic",
+            output_text=data_only,
+            source_content=CYBERSHIELD_SOURCE
+        )
+        self.assertTrue(
+            any("lacks layout or visual design recommendations" in issue.lower() or "visual" in issue.lower() for issue in val["issues"]),
+            f"Expected missing visual recommendations issue, got: {val['issues']}"
+        )
+        self.assertEqual(val["severity"], "warning")
+
+    def test_clean_valid_infographic_does_not_trigger_unnecessary_recovery(self):
+        # Clean grounded infographic blueprint with both components
+        clean_infographic = (
+            "Infographic Blueprint: Project CyberShield Framework\n\n"
+            "Core Key Message:\n"
+            "Project CyberShield safeguards cloud infrastructure across distributed multi-cloud environments.\n\n"
+            "Key Data & Metric Callouts:\n"
+            "• Pilot Threat Response: 68% reduction in threat response times.\n"
+            "• Intrusion Mitigation: 99.4% of simulated intrusions mitigated before lateral movement.\n\n"
+            "Sectional Narrative Flow:\n"
+            "• Section 1: Overview and zero-trust framework objectives.\n"
+            "• Section 2: Real-time anomaly detection and automated policy enforcement.\n"
+            "• Section 3: SOC2 Type II certification and ISO/IEC 27001 compliance.\n\n"
+            "Layout & Visual Recommendations:\n"
+            "• Visual Layout: Top banner header with metric cards and narrative flow.\n"
+            "• Recommended Color Palette: Modern dark slate with indigo accents.\n"
+            "• Icon Suggestions: Shield icon for zero-trust compliance, checkmark for certifications."
+        )
+        val = validate_output(
+            output_type="Infographic",
+            output_text=clean_infographic,
+            source_content=CYBERSHIELD_SOURCE
+        )
+        self.assertTrue(val["valid"])
+        self.assertEqual(val["severity"], "none")
+        self.assertEqual(len(val["issues"]), 0, f"Unexpected issues in clean infographic: {val['issues']}")
+        self.assertTrue(val["factual_grounding"]["is_grounded"])
+        self.assertFalse(should_trigger_recovery(val), "Clean valid Infographic should not trigger recovery")
+
+
+class TestVideoPackageFormatValidation(unittest.TestCase):
+    """
+    Dedicated test suite for Video Package format-specific validation in validate_output():
+    - Valid video package with both scenes and voiceover script passes
+    - Generic prose mentioning keywords is flagged
+    - Video package with scenes/storyboard only is flagged as incomplete
+    - Video package with voiceover only is flagged as incomplete
+    - Clean valid video package does not trigger recovery unnecessarily
+    """
+
+    def test_valid_video_package_passes(self):
+        # Valid video package with full voiceover and storyboard scene breakdown
+        valid_video = (
+            "Video Production Package: Project CyberShield Framework\n"
+            "Video Objective: Inform stakeholders on enterprise framework capabilities and metrics.\n"
+            "Full Voiceover Script:\n"
+            "Project CyberShield safeguards cloud infrastructure across distributed multi-cloud environments. "
+            "During internal pilot testing, automated detection reduced threat response times by 68%, mitigating 99.4% of simulated intrusions before lateral movement. "
+            "The platform has received SOC2 Type II certification and adheres to ISO/IEC 27001 standards.\n"
+            "Storyboard Breakdown:\n"
+            "Scene 1: Motion graphics of multi-cloud environments.\n"
+            "On-Screen Text: Project CyberShield zero-trust architecture.\n"
+            "Scene 2: Graphic display of pilot metrics.\n"
+            "On-Screen Text: 68% reduction in threat response times and 99.4% intrusion mitigation."
+        )
+        val = validate_output(
+            output_type="Video Package",
+            output_text=valid_video,
+            source_content=CYBERSHIELD_SOURCE
+        )
+        self.assertTrue(val["valid"], f"Valid Video Package marked invalid: {val}")
+        self.assertEqual(val["severity"], "none")
+        self.assertEqual(len(val["issues"]), 0, f"Unexpected issues in valid Video Package: {val['issues']}")
+        self.assertTrue(val["factual_grounding"]["is_grounded"])
+
+    def test_generic_prose_video_keywords_flagged(self):
+        # Generic running prose mentioning keywords without actual structural sections
+        generic_prose = "In this video package, the scene is set in an office and the narration explains the core concepts and storyboard."
+        val = validate_output(
+            output_type="Video Package",
+            output_text=generic_prose,
+            source_content=CYBERSHIELD_SOURCE
+        )
+        self.assertTrue(
+            any("lacks scene-by-scene storyboard structure and voiceover narration script" in issue.lower() or "storyboard" in issue.lower() for issue in val["issues"]),
+            f"Expected structure issue for generic prose, got: {val['issues']}"
+        )
+        self.assertEqual(val["severity"], "warning")
+
+    def test_video_package_scenes_only_flagged(self):
+        # Contains Scene breakdown / Storyboard only, missing voiceover script or audio dialogue
+        scenes_only = (
+            "Storyboard Breakdown:\n"
+            "Scene 1: Drone footage over multi-cloud environments.\n"
+            "Visual Description / Action: Animated infrastructure map demonstrating zero-trust coverage.\n"
+            "On-Screen Text: Project CyberShield Architecture.\n"
+            "Scene 2: Graphic display of pilot metrics.\n"
+            "On-Screen Text: 68% reduction in threat response times."
+        )
+        val = validate_output(
+            output_type="Video Package",
+            output_text=scenes_only,
+            source_content=CYBERSHIELD_SOURCE
+        )
+        self.assertTrue(
+            any("lacks voiceover narration script or audio dialogue" in issue.lower() or "voiceover" in issue.lower() for issue in val["issues"]),
+            f"Expected missing voiceover script issue, got: {val['issues']}"
+        )
+        self.assertEqual(val["severity"], "warning")
+
+    def test_video_package_voiceover_only_flagged(self):
+        # Contains Voiceover script only, missing scene-by-scene storyboard or visual cues
+        voiceover_only = (
+            "Full Voiceover Script:\n"
+            "Project CyberShield safeguards cloud infrastructure across distributed multi-cloud environments. "
+            "During internal pilot testing, automated detection reduced threat response times by 68%, mitigating 99.4% of simulated intrusions before lateral movement. "
+            "The platform has received SOC2 Type II certification and adheres to ISO/IEC 27001 standards."
+        )
+        val = validate_output(
+            output_type="Video Package",
+            output_text=voiceover_only,
+            source_content=CYBERSHIELD_SOURCE
+        )
+        self.assertTrue(
+            any("lacks scene-by-scene storyboard breakdown or visual cues" in issue.lower() or "storyboard" in issue.lower() for issue in val["issues"]),
+            f"Expected missing storyboard breakdown issue, got: {val['issues']}"
+        )
+        self.assertEqual(val["severity"], "warning")
+
+    def test_clean_valid_video_package_does_not_trigger_unnecessary_recovery(self):
+        # Clean grounded video package with both components
+        clean_video = (
+            "Video Production Package: Project CyberShield Framework\n"
+            "Video Objective: Inform stakeholders on enterprise framework capabilities and metrics.\n"
+            "Full Voiceover Script:\n"
+            "Project CyberShield safeguards cloud infrastructure across distributed multi-cloud environments. "
+            "During internal pilot testing, automated detection reduced threat response times by 68%, mitigating 99.4% of simulated intrusions before lateral movement. "
+            "The platform has received SOC2 Type II certification and adheres to ISO/IEC 27001 standards.\n"
+            "Storyboard Breakdown:\n"
+            "Scene 1: Motion graphics of multi-cloud environments.\n"
+            "On-Screen Text: Project CyberShield zero-trust architecture.\n"
+            "Scene 2: Graphic display of pilot metrics.\n"
+            "On-Screen Text: 68% reduction in threat response times and 99.4% intrusion mitigation."
+        )
+        val = validate_output(
+            output_type="Video Package",
+            output_text=clean_video,
+            source_content=CYBERSHIELD_SOURCE
+        )
+        self.assertTrue(val["valid"])
+        self.assertEqual(val["severity"], "none")
+        self.assertEqual(len(val["issues"]), 0, f"Unexpected issues in clean video package: {val['issues']}")
+        self.assertTrue(val["factual_grounding"]["is_grounded"])
+        self.assertFalse(should_trigger_recovery(val), "Clean valid Video Package should not trigger recovery")
+
+
+class TestLinkedInPostFormatValidation(unittest.TestCase):
+    """
+    Dedicated test suite for LinkedIn Post format-specific validation in validate_output():
+    1. Valid structured LinkedIn post passes.
+    2. Generic prose containing '#' is flagged.
+    3. Hook-only post is flagged.
+    4. Body/takeaways without hook or CTA is flagged.
+    5. CTA-only post is flagged.
+    6. Post without hashtags is flagged.
+    7. Fully valid grounded LinkedIn post does not trigger unnecessary recovery.
+    """
+
+    def test_valid_structured_linkedin_post_passes(self):
+        # Valid post with Hook, Body/Takeaways, CTA, and Hashtags
+        valid_post = (
+            "🛡️ Enterprise Cybersecurity Update:\n\n"
+            "During internal pilot testing of Project CyberShield, automated detection reduced threat response times by 68% "
+            "and blocked 99.4% of simulated intrusions before lateral movement!\n\n"
+            "Key Takeaways:\n"
+            "• Automated detection reduced threat response times by 68%.\n"
+            "• Mitigated 99.4% of simulated intrusions before lateral movement.\n"
+            "• The platform has received SOC2 Type II certification and adheres to ISO/IEC 27001 standards.\n\n"
+            "What is your organization doing to advance zero-trust security? Share your thoughts below!\n\n"
+            "#CyberSecurity #CloudSecurity #ZeroTrust"
+        )
+        val = validate_output(
+            output_type="LinkedIn Post",
+            output_text=valid_post,
+            source_content=CYBERSHIELD_SOURCE
+        )
+        self.assertTrue(val["valid"], f"Valid LinkedIn Post marked invalid: {val}")
+        self.assertEqual(val["severity"], "none")
+        self.assertEqual(len(val["issues"]), 0, f"Unexpected issues in valid LinkedIn Post: {val['issues']}")
+        self.assertTrue(val["factual_grounding"]["is_grounded"])
+
+    def test_generic_prose_containing_hashtag_flagged(self):
+        # Generic running prose mentioning keywords with a hashtag
+        generic_prose = "In this post, the hook explains how cybersecurity is important, the takeaway is to use strong passwords, and the call to action is to stay safe #CyberSecurity"
+        val = validate_output(
+            output_type="LinkedIn Post",
+            output_text=generic_prose,
+            source_content=CYBERSHIELD_SOURCE
+        )
+        self.assertTrue(
+            any("missing structural components" in issue.lower() or "lacks required structure" in issue.lower() for issue in val["issues"]),
+            f"Expected structural issue for generic prose, got: {val['issues']}"
+        )
+        self.assertEqual(val["severity"], "warning")
+
+    def test_hook_only_post_flagged(self):
+        # Has hook and hashtags, but lacks structured body/takeaways and CTA
+        hook_only = (
+            "🛡️ Enterprise Cybersecurity Update:\n"
+            "Project CyberShield safeguards cloud infrastructure across distributed multi-cloud environments.\n\n"
+            "#CyberSecurity #ZeroTrust"
+        )
+        val = validate_output(
+            output_type="LinkedIn Post",
+            output_text=hook_only,
+            source_content=CYBERSHIELD_SOURCE
+        )
+        self.assertTrue(
+            any("body" in issue.lower() or "cta" in issue.lower() or "call-to-action" in issue.lower() for issue in val["issues"]),
+            f"Expected missing body/CTA issue, got: {val['issues']}"
+        )
+        self.assertEqual(val["severity"], "warning")
+
+    def test_body_takeaways_without_hook_or_cta_flagged(self):
+        # Has body/takeaways and hashtags, but lacks hook and CTA
+        body_only = (
+            "Key Takeaways:\n"
+            "• Reduced threat response times by 68%.\n"
+            "• Mitigated 99.4% of simulated intrusions before lateral movement.\n\n"
+            "#CyberSecurity #ZeroTrust"
+        )
+        val = validate_output(
+            output_type="LinkedIn Post",
+            output_text=body_only,
+            source_content=CYBERSHIELD_SOURCE
+        )
+        self.assertTrue(
+            any("opening hook" in issue.lower() or "call-to-action" in issue.lower() or "cta" in issue.lower() for issue in val["issues"]),
+            f"Expected missing hook/CTA issue, got: {val['issues']}"
+        )
+        self.assertEqual(val["severity"], "warning")
+
+    def test_cta_only_post_flagged(self):
+        # Has CTA and hashtags, but lacks hook and body
+        cta_only = (
+            "What is your organization doing to advance zero-trust security? Share your thoughts below!\n\n"
+            "#CyberSecurity #ZeroTrust"
+        )
+        val = validate_output(
+            output_type="LinkedIn Post",
+            output_text=cta_only,
+            source_content=CYBERSHIELD_SOURCE
+        )
+        self.assertTrue(
+            any("opening hook" in issue.lower() or "body" in issue.lower() or "takeaways" in issue.lower() for issue in val["issues"]),
+            f"Expected missing hook/body issue, got: {val['issues']}"
+        )
+        self.assertEqual(val["severity"], "warning")
+
+    def test_post_without_hashtags_flagged(self):
+        # Has hook, body, and CTA, but lacks hashtags
+        no_hashtags = (
+            "🛡️ Enterprise Cybersecurity Update:\n\n"
+            "Key Takeaways:\n"
+            "• Automated detection reduced threat response times by 68%.\n"
+            "• Mitigated 99.4% of simulated intrusions before lateral movement.\n\n"
+            "What is your organization doing to advance zero-trust security? Share your thoughts below!"
+        )
+        val = validate_output(
+            output_type="LinkedIn Post",
+            output_text=no_hashtags,
+            source_content=CYBERSHIELD_SOURCE
+        )
+        self.assertTrue(
+            any("missing hashtags" in issue.lower() for issue in val["issues"]),
+            f"Expected missing hashtags issue, got: {val['issues']}"
+        )
+        self.assertEqual(val["severity"], "warning")
+
+    def test_fully_valid_grounded_linkedin_post_does_not_trigger_unnecessary_recovery(self):
+        # Fully valid grounded post
+        valid_post = (
+            "🛡️ Enterprise Cybersecurity Update:\n\n"
+            "During internal pilot testing of Project CyberShield, automated detection reduced threat response times by 68% "
+            "and blocked 99.4% of simulated intrusions before lateral movement!\n\n"
+            "Key Takeaways:\n"
+            "• Automated detection reduced threat response times by 68%.\n"
+            "• Mitigated 99.4% of simulated intrusions before lateral movement.\n"
+            "• The platform has received SOC2 Type II certification and adheres to ISO/IEC 27001 standards.\n\n"
+            "What is your organization doing to advance zero-trust security? Share your thoughts below!\n\n"
+            "#CyberSecurity #CloudSecurity #ZeroTrust"
+        )
+        val = validate_output(
+            output_type="LinkedIn Post",
+            output_text=valid_post,
+            source_content=CYBERSHIELD_SOURCE
+        )
+        self.assertTrue(val["valid"])
+        self.assertEqual(val["severity"], "none")
+        self.assertEqual(len(val["issues"]), 0, f"Unexpected issues in clean LinkedIn Post: {val['issues']}")
+        self.assertTrue(val["factual_grounding"]["is_grounded"])
+        self.assertFalse(should_trigger_recovery(val), "Clean valid LinkedIn Post should not trigger recovery")
+
+
 if __name__ == "__main__":
     unittest.main()
+
 
 
 
