@@ -11,6 +11,15 @@ const OUTPUT_TYPES = [
   { id: 'Video Package', label: 'Video Package', icon: '\u{1F3AC}' },
 ];
 
+const AUDIENCE_OPTIONS = [
+  'C-Suite & Executive Leadership',
+  'Engineering & Technical Teams',
+  'Product & Project Managers',
+  'Compliance & Legal Stakeholders',
+  'Marketing & Communications',
+  'Investors & Financial Analysts',
+  'General Audience'
+];
 const TONE_OPTIONS = ['Professional', 'Urgent', 'Casual', 'Inspiring', 'Informative', 'Persuasive'];
 const OBJECTIVE_OPTIONS = ['Inform', 'Persuade', 'Educate', 'Call to Action', 'Inspire', 'Decision Support'];
 const STYLE_OPTIONS = ['Direct & Concise', 'Analytical & Data-Driven', 'Storytelling & Narrative', 'Technical & Precise', 'Conversational'];
@@ -27,7 +36,7 @@ const DEMO_PRESETS = [
     source: `Project CyberShield is an enterprise cybersecurity framework initiated in Q1 2026 to safeguard cloud infrastructure, identify zero-day vulnerabilities, and ensure zero-trust compliance across distributed multi-cloud environments. During internal pilot testing, automated detection reduced threat response times by 68%, mitigating 99.4% of simulated intrusions before lateral movement occurred. Key pillars include real-time anomaly detection, automated policy enforcement, continuous posture management, and seamless CI/CD security scanning. The platform has received SOC2 Type II certification and adheres to ISO/IEC 27001 standards.`,
     documentName: 'Project_CyberShield_Audit_Q1_2026.pdf',
     outputTypes: ['Executive Summary', 'Advisory', 'LinkedIn Post', 'Presentation'],
-    audience: 'Enterprise Leadership and Security Teams',
+    audience: 'Engineering & Technical Teams',
     tone: 'Professional',
     objective: 'Inform',
     style: 'Analytical & Data-Driven',
@@ -40,7 +49,7 @@ const DEMO_PRESETS = [
     source: `In Q3 2026, the Global Infrastructure Group completed a cloud consolidation initiative across 4 global regions, optimizing 14,000 container instances. The migration delivered $42.5M in annual recurring savings, achieved a 3.8x ROI within 9 months, and maintained 99.99% operational uptime. Carbon footprint and idle compute power consumption were reduced by 31% through automated workload scheduling. Leadership has approved Phase 2 rollout for APAC expansion.`,
     documentName: 'Cloud_Optimization_Q3_Review.docx',
     outputTypes: ['Executive Summary', 'Infographic', 'Presentation', 'LinkedIn Post'],
-    audience: 'C-Suite Executives & Financial Stakeholders',
+    audience: 'C-Suite & Executive Leadership',
     tone: 'Inspiring',
     objective: 'Decision Support',
     style: 'Direct & Concise',
@@ -53,7 +62,7 @@ const DEMO_PRESETS = [
     source: `The 2026 Enterprise GenAI Governance Protocol establishes mandatory deployment safeguards across all internal and customer-facing AI agents. Protocols require automated PII redaction with 99.8% precision, mandatory human-in-the-loop signoff for contract generation, and strict 15ms latency budgets for mission-critical validation pipelines. Non-compliance results in immediate model rollback. All automated reasoning logs must be preserved for 365 days in tamper-evident storage for regulatory auditability.`,
     documentName: 'Enterprise_AI_Policy_2026.txt',
     outputTypes: ['Executive Summary', 'Advisory', 'Twitter/X Post', 'Presentation'],
-    audience: 'Engineering & Compliance Teams',
+    audience: 'Compliance & Legal Stakeholders',
     tone: 'Professional',
     objective: 'Educate',
     style: 'Technical & Precise',
@@ -148,7 +157,7 @@ function parseInfographicData(text) {
 function App() {
   const [sourceContent, setSourceContent] = useState('');
   const [outputTypes, setOutputTypes] = useState(['Executive Summary']);
-  const [targetAudience, setTargetAudience] = useState('C-suite Executives');
+  const [targetAudience, setTargetAudience] = useState('C-Suite & Executive Leadership');
   const [tone, setTone] = useState('Professional');
   const [communicationObjective, setCommunicationObjective] = useState('Inform');
   const [contentStyle, setContentStyle] = useState('Direct & Concise');
@@ -896,15 +905,17 @@ function App() {
                   <label htmlFor="target-audience" className="form-label" style={{ fontSize: '0.8rem' }}>
                     Target Audience
                   </label>
-                  <input
+                  <select
                     id="target-audience"
-                    type="text"
-                    className="form-input"
-                    placeholder="e.g. C-suite, Engineers"
+                    className="form-select"
                     value={targetAudience}
                     onChange={(e) => setTargetAudience(e.target.value)}
                     disabled={loading}
-                  />
+                  >
+                    {AUDIENCE_OPTIONS.map((aud) => (
+                      <option key={aud} value={aud}>{aud}</option>
+                    ))}
+                  </select>
                 </div>
 
                 {/* Communication Objective */}
