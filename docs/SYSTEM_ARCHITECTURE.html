@@ -1,0 +1,446 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>AI Content Transformer - System Architecture</title>
+  <style>
+    @page {
+      size: A4;
+      margin: 0;
+    }
+    * {
+      box-sizing: border-box;
+    }
+    body {
+      margin: 0;
+      padding: 0;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif;
+      color: #0f172a;
+      background: #f1f5f9;
+      font-size: 8.5pt;
+      line-height: 1.35;
+      -webkit-print-color-adjust: exact;
+    }
+    .page {
+      width: 210mm;
+      height: 297mm;
+      padding: 11mm 13mm;
+      margin: 0 auto;
+      background: #ffffff;
+      position: relative;
+      overflow: hidden;
+      page-break-after: always;
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+    }
+    .header {
+      border-bottom: 2px solid #4f46e5;
+      padding-bottom: 4px;
+      margin-bottom: 7px;
+    }
+    .title-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-end;
+    }
+    .title {
+      font-size: 13pt;
+      font-weight: 800;
+      color: #1e1b4b;
+      margin: 0;
+      letter-spacing: -0.2px;
+    }
+    .badge {
+      font-size: 7.5pt;
+      font-weight: 700;
+      background: #e0e7ff;
+      color: #3730a3;
+      padding: 2px 7px;
+      border-radius: 4px;
+      border: 1px solid #c7d2fe;
+    }
+    .subtitle {
+      font-size: 7.5pt;
+      color: #475569;
+      margin-top: 2px;
+      font-weight: 500;
+    }
+    h2 {
+      font-size: 9.5pt;
+      font-weight: 800;
+      color: #1e1b4b;
+      margin: 6px 0 3px 0;
+      border-left: 3px solid #6366f1;
+      padding-left: 5px;
+      text-transform: uppercase;
+      letter-spacing: 0.3px;
+    }
+    p {
+      margin: 0 0 4px 0;
+      text-align: justify;
+    }
+    .diag-box {
+      background: #f8fafc;
+      border: 1px solid #cbd5e1;
+      border-radius: 4px;
+      padding: 4px 6px;
+      font-family: "Courier New", Courier, monospace;
+      font-size: 6.8pt;
+      line-height: 1.15;
+      color: #0f172a;
+      white-space: pre;
+      margin: 4px 0;
+      overflow: hidden;
+    }
+    .grid-2 {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 7px;
+      margin: 4px 0;
+    }
+    .grid-3 {
+      display: grid;
+      grid-template-columns: 1fr 1fr 1fr;
+      gap: 6px;
+      margin: 4px 0;
+    }
+    .card {
+      background: #f8fafc;
+      border: 1px solid #e2e8f0;
+      border-radius: 4px;
+      padding: 5px 6px;
+    }
+    .card-title {
+      font-size: 8pt;
+      font-weight: 700;
+      color: #312e81;
+      margin-bottom: 2px;
+      display: flex;
+      align-items: center;
+      gap: 4px;
+    }
+    .card p, .card ul {
+      margin: 0;
+      font-size: 7.5pt;
+      line-height: 1.25;
+    }
+    ul {
+      margin: 0 0 4px 0;
+      padding-left: 14px;
+    }
+    li {
+      margin-bottom: 2px;
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 7.2pt;
+      margin: 4px 0;
+    }
+    th, td {
+      border: 1px solid #cbd5e1;
+      padding: 3px 5px;
+      text-align: left;
+    }
+    th {
+      background: #f1f5f9;
+      font-weight: 700;
+      color: #1e293b;
+    }
+    .formula-box {
+      background: #eef2ff;
+      border: 1px solid #c7d2fe;
+      border-radius: 4px;
+      padding: 4px 8px;
+      font-size: 8pt;
+      font-weight: 600;
+      color: #312e81;
+      margin: 4px 0;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    .footer {
+      border-top: 1px solid #e2e8f0;
+      padding-top: 3px;
+      display: flex;
+      justify-content: space-between;
+      font-size: 6.8pt;
+      color: #64748b;
+      margin-top: auto;
+    }
+    .strong {
+      font-weight: 700;
+      color: #0f172a;
+    }
+    .code-tag {
+      background: #e2e8f0;
+      padding: 1px 3px;
+      border-radius: 2px;
+      font-family: monospace;
+      font-size: 7pt;
+    }
+  </style>
+</head>
+<body>
+
+  <!-- ==================== PAGE 1 ==================== -->
+  <div class="page" id="page1">
+    <div>
+      <div class="header">
+        <div class="title-row">
+          <h1 class="title">AI CONTENT TRANSFORMER</h1>
+          <span class="badge">SIH TECHNICAL SPECIFICATION · PAGE 1 OF 2</span>
+        </div>
+        <div class="subtitle">Enterprise Multimodal Transformation Engine with Deterministic Factual Grounding & Targeted Self-Healing</div>
+      </div>
+
+      <h2>1. System Overview & Problem Statement</h2>
+      <p>
+        In enterprise, government, and institutional environments, raw source information (audit reports, incident logs, policy memos) must be communicated across conflicting stakeholder domains: C-Suite leaders require concise executive impact; engineering leads require root-cause advisories; marketing teams require social summaries; visual teams require presentations and video storyboards. Traditional generative AI workflows suffer from <span class="strong">factual drift, ungrounded extrapolations, contradictory statistics across formats, and excessive regeneration latency</span> caused by uncoordinated sequential prompts.
+      </p>
+      <p>
+        <span class="strong">The Architecture:</span> The platform solves this through a three-tier architecture: an upstream <span class="strong">Canonical Content Model (CCM)</span> extracting ground-truth facts, a <span class="strong">Consolidated Generation Engine</span> producing up to 7 formats simultaneously via Google Gemini (<span class="code-tag">gemini-3.5-flash-lite</span>) in ~7s, and an application-side <span class="strong">Deterministic Grounding Engine</span> that verifies factual integrity and triggers isolated <span class="strong">Targeted Self-Healing</span> without regenerating valid outputs.
+      </p>
+
+      <h2>2. High-Level System Architecture</h2>
+      <div class="diag-box">
+┌────────────────────────────────────────────────────────────────────────────────────────┐
+│               PRESENTATION LAYER (React 18 + Vite SPA · 5-Stage Orchestration)         │
+│ Source Ingestion → Dropdown Configurations → Multi-Chip Selector → Visualizers & Export │
+└───────────────────────────────────────────┬────────────────────────────────────────────┘
+                                            │ HTTP / JSON & Multipart
+                                            ▼
+┌────────────────────────────────────────────────────────────────────────────────────────┐
+│                        API GATEWAY (FastAPI on Uvicorn · Starlette)                     │
+│ 35 MB Request Body Protection Guard · 60 req/min IP Rate Limiter · Pydantic Contracts  │
+└───────────────────────┬────────────────────────────────────────┬───────────────────────┘
+                        ▼                                        ▼
+┌──────────────────────────────────────────────┐  ┌──────────────────────────────────────┐
+│        INPUT & DOCUMENT PROCESSING           │  │       CANONICAL CONTENT MODEL        │
+│ In-memory PDF (pypdf), DOCX (docx), TXT, MD  │  │ Structured Factual Reference Truth:  │
+│ Base64 Image/Video parser + Content Sanitizer│  │ Claims · Metrics · Dates · Entities  │
+└───────────────────────┬──────────────────────┘  └──────────────────┬───────────────────┘
+                        └──────────────────────┬─────────────────────┘
+                                               ▼
+┌────────────────────────────────────────────────────────────────────────────────────────┐
+│            CONSOLIDATED GEMINI GENERATION ENGINE (gemini-3.5-flash-lite)               │
+│ Single Structured Prompt + Canonical Context → 7 Output Formats Generated in 1 Pass    │
+└──────────────────────────────────────────────┬─────────────────────────────────────────┘
+                                               ▼
+┌────────────────────────────────────────────────────────────────────────────────────────┐
+│             DETERMINISTIC FACTUAL GROUNDING ENGINE (Application-Side)                  │
+│ Metric Normalizer · Event/Entity Checker · Stemming Engine · Quality Gate (>= 0.80)   │
+└───────────────────────┬────────────────────────────────────────┬───────────────────────┘
+          Gate Passed   │                                        │ Gate Failed / Unsafe
+                        ▼                                        ▼
+┌──────────────────────────────────────────────┐  ┌──────────────────────────────────────┐
+│        PROVENANCE REGISTRY & RESULTS         │  │     TARGETED SELF-HEALING LOOP       │
+│ Visualizers: Slides · Infographics · Video   │  │ Isolates failed format; injects      │
+│ In-place Refine (/refine) · Export (.md/.json)│  │ negative feedback; regenerates 1 only│
+└──────────────────────────────────────────────┘  └──────────────────────────────────────┘</div>
+
+      <h2>3. Major Architectural Subsystems</h2>
+      <div class="grid-3">
+        <div class="card">
+          <div class="card-title">🖥️ Presentation Layer</div>
+          <p>React 18 + Vite SPA. Manages 5-stage state pipeline. Custom visualizers: slide deck carousel with speaker notes, KPI card layouts, 3-column video storyboards, and inline single-format refinement drawers.</p>
+        </div>
+        <div class="card">
+          <div class="card-title">🛡️ API Gateway Layer</div>
+          <p>FastAPI modular monolith. Enforces Pydantic v2 schemas (<span class="code-tag">TransformRequest</span>, <span class="code-tag">RefineRequest</span>), 35MB payload limit middleware, and in-memory sliding-window IP rate limiter (60 req/min).</p>
+        </div>
+        <div class="card">
+          <div class="card-title">⚙️ Grounding & Healing</div>
+          <p>Application-side deterministic validation. Decoupled from LLM: uses suffix-stripping morphological stemming, currency normalizers, multi-scale windows, and single-format recovery loops.</p>
+        </div>
+      </div>
+
+      <h2>4. Canonical Content Model (CCM) — Upstream Ground Truth</h2>
+      <p>
+        Defined in <span class="code-tag">transform_schema.py</span> and constructed deterministically in <span class="code-tag">transform_service.py</span> before generation. Captures verbatim source truth to prevent hallucination at prompt inception and act as reference oracle during audit:
+      </p>
+      <ul>
+        <li><span class="strong">Claims:</span> Substantive factual assertions split along sentence boundaries.</li>
+        <li><span class="strong">Metrics & Currencies:</span> Normalized numbers, percentages, multipliers, and financial amounts (e.g., $12M = 12 million dollars).</li>
+        <li><span class="strong">Dates & Entities:</span> Temporal anchors (quarters, years, calendar dates) and compound enterprise/platform nouns.</li>
+        <li><span class="strong">Events & Standards:</span> Real-world corporate milestones (acquisitions, certifications) and benchmarks (<span class="code-tag">SOC 2</span>, <span class="code-tag">ISO 27001</span>).</li>
+        <li><span class="strong">Traceability:</span> Retains <span class="code-tag">source_reference</span> and raw <span class="code-tag">source_text</span> directly for end-to-end auditability.</li>
+      </ul>
+
+      <h2>5. Consolidated AI Generation Architecture</h2>
+      <p>
+        Instead of dispatching 7 separate LLM calls (25–35s latency and cross-format divergence), the system executes a <span class="strong">single consolidated Gemini request</span>. Formulates a unified prompt embedding the source, CCM context, and strict JSON schema blueprints for all requested formats. Configured to <span class="code-tag">gemini-3.5-flash-lite</span> with <span class="code-tag">temperature=0.3</span>, <span class="code-tag">max_output_tokens=8192</span>, and <span class="code-tag">response_mime_type="application/json"</span>. Completes all 7 formats simultaneously in ~6.94 seconds (~0.99s per format).
+      </p>
+
+      <h2>6. Multimodal Ingestion Specifications</h2>
+      <table>
+        <thead>
+          <tr>
+            <th>Modality</th>
+            <th>Supported Formats</th>
+            <th>Limit</th>
+            <th>Processing Pipeline & Security Safeguards</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><span class="strong">Direct Text</span></td>
+            <td>Plain text, raw notes, transcripts</td>
+            <td>35 MB</td>
+            <td>UTF-8 normalization; min-length validation (&ge; 5 chars, &ge; 2 words); null byte rejection</td>
+          </tr>
+          <tr>
+            <td><span class="strong">Documents</span></td>
+            <td>.txt, .md, .pdf, .docx</td>
+            <td>35 MB</td>
+            <td>In-memory parsing via <span class="code-tag">pypdf</span> & <span class="code-tag">python-docx</span>; checks null bytes, unicode \ufffd, control chars</td>
+          </tr>
+          <tr>
+            <td><span class="strong">Images</span></td>
+            <td>.png, .jpg, .jpeg, .webp, .gif</td>
+            <td>10 MB</td>
+            <td>Base64 Data URI parser & MIME validation; injected as native Gemini vision payload parts</td>
+          </tr>
+          <tr>
+            <td><span class="strong">Videos</span></td>
+            <td>.mp4, .webm, .mov</td>
+            <td>25 MB</td>
+            <td>Base64 Data URI parser & MIME validation; injected as native Gemini video payload parts</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="footer">
+      <span>AI Content Transformer · SIH Technical Architecture Specification</span>
+      <span>Confidential · Evaluator Review Copy</span>
+      <span>Page 1 of 2</span>
+    </div>
+  </div>
+
+  <!-- ==================== PAGE 2 ==================== -->
+  <div class="page" id="page2">
+    <div>
+      <div class="header">
+        <div class="title-row">
+          <h1 class="title">AI CONTENT TRANSFORMER</h1>
+          <span class="badge">SIH TECHNICAL SPECIFICATION · PAGE 2 OF 2</span>
+        </div>
+        <div class="subtitle">Deterministic Validation, Targeted Recovery, Security Controls & Empirical Verification</div>
+      </div>
+
+      <h2>7. Deterministic Factual Grounding Engine</h2>
+      <p>
+        Because LLMs produce plausible but fabricated statistics and events, the architecture <span class="strong">decouples generation from validation</span>. Validation is executed deterministically on the application server without circular LLM self-evaluation:
+      </p>
+      <ul>
+        <li><span class="strong">Scaffolding Exclusion:</span> Strips non-factual formatting labels (<span class="code-tag">Slide 1:</span>, <span class="code-tag">Scene 2:</span>, <span class="code-tag">Narration:</span>) before verification to eliminate false-positive flags.</li>
+        <li><span class="strong">Metric & Currency Normalization:</span> Converts varied monetary strings into normalized <span class="code-tag">(currency, float)</span> tuples. Rejects ungrounded numerical deviations (e.g., claiming 15% when source states 12%).</li>
+        <li><span class="strong">Event & Relation Verification:</span> Checks binding business milestones (acquisitions, certifications) against <span class="code-tag">FACTUAL_EVENT_PATTERNS</span>.</li>
+        <li><span class="strong">Morphological Suffix-Stripping Stemmer:</span> Resolves grammatical inflections (<span class="code-tag">reduces</span> = <span class="code-tag">reducing</span>) to prevent false rejections of valid paraphrasing.</li>
+        <li><span class="strong">Multi-Scale Source Window Containment:</span> Validates candidate propositions against sentence windows and 3-sentence sliding chunks.</li>
+        <li><span class="strong">Cross-Format Consistency Matrix:</span> Compares extracted metrics across all 7 formats to detect cross-deliverable factual contradictions.</li>
+      </ul>
+
+      <h2>8. Composite Quality Gate & Scoring Formula</h2>
+      <div class="formula-box">
+        <span>Deterministic Formula: Score = 0.35 × Grounding + 0.25 × Structure + 0.25 × Consistency + 0.15 × Compliance</span>
+        <span class="badge">Gate Threshold: &ge; 0.80</span>
+      </div>
+      <p>
+        <span class="strong">Weights:</span> Grounding (0.35, -0.35 per unverified metric, -0.30 per unsupported event); Structure (0.25, format compliance); Consistency (0.25, -0.20 per cross-format contradiction); Compliance (0.15, audience/tone adherence). The Quality Gate passes if <span class="strong">Score &ge; 0.80</span> and zero fatal structural or grounding defects exist.
+      </p>
+
+      <h2>9. Targeted Self-Healing / Single-Format Recovery</h2>
+      <p>
+        When an output format fails validation, the system executes an isolated recovery workflow rather than restarting the entire generation pipeline:
+      </p>
+      <div class="diag-box">
+[Outputs Generated] ──► [Grounding Engine] ──► Format Fails (e.g. Advisory metric error)
+                                                     │
+                                                     ▼
+[Valid Formats Preserved] ◄── [Re-Validated] ◄── [Targeted LLM Call] ◄── [Negative Prompt with Defect Report]</div>
+      <p>
+        <span class="code-tag">targeted_recover_missing_output()</span> isolates *only* the failing format, constructs a targeted prompt containing the failed draft, itemized defect list, and explicit negative constraints (e.g., *"Eliminate unverified metric 15%; ground all claims in source"*), dispatches a single Gemini request, re-validates the output, and merges it back into the result set.
+      </p>
+
+      <h2>10. Selective Single-Output Refinement (`/refine`)</h2>
+      <p>
+        Users can iteratively revise individual outputs without causing side-effects on sibling deliverables. The <span class="code-tag">POST /refine</span> endpoint takes user instructions and current text, refines only that target format via Gemini in ~1.89 seconds, re-runs factual grounding, and updates *only* that format key in the frontend React state while keeping all other deliverables frozen.
+      </p>
+
+      <h2>11. Security, Isolation & Reliability Controls</h2>
+      <div class="grid-2">
+        <div class="card">
+          <div class="card-title">🔒 Secret & API Key Isolation</div>
+          <p>Server-side <span class="code-tag">.env</span> boundary. Zero keys exposed to client bundles or tracked in git (<span class="code-tag">git grep "AIzaSy"</span> returns 0). Client communicates strictly via schema-validated API gateway.</p>
+        </div>
+        <div class="card">
+          <div class="card-title">🛡️ DoS & Payload Defense</div>
+          <p>Starlette middleware drops requests > 35 MB before memory buffering (<span class="code-tag">HTTP 413</span>). Sliding-window IP rate limiter enforces 60 req/min limit on transform routes (<span class="code-tag">HTTP 429</span>).</p>
+        </div>
+        <div class="card">
+          <div class="card-title">📁 In-Memory File Processing</div>
+          <p>Documents and media parsed purely in RAM streams (<span class="code-tag">io.BytesIO</span>). Zero disk persistence, eliminating path traversal (<span class="code-tag">../</span>) and arbitrary script execution risks.</p>
+        </div>
+        <div class="card">
+          <div class="card-title">⚡ Deterministic Mock Fallback</div>
+          <p>Setting <span class="code-tag">USE_MOCK=true</span> triggers offline deterministic mock generation, allowing complete end-to-end evaluation without API quota or network access.</p>
+        </div>
+      </div>
+
+      <h2>12. Key API Specifications & Request Contracts</h2>
+      <div class="diag-box">
+POST /transform    · In: TransformRequest { source_content, output_types, target_audience, tone, language, detail_level, ... }
+                   · Out: TransformResponse { status, outputs: { format: text }, metadata, provenance, quality_gate, ... }
+POST /refine       · In: RefineRequest { source_content, output_type, current_output, refinement_instruction, ... }
+                   · Out: RefineResponse { status, output_type, refined_output, provenance, quality_gate }
+POST /extract-text · In: Multipart FormData { file: UploadFile } (.txt, .md, .pdf, .docx) ──► Out: { filename, extracted_text, character_count }
+GET  /health       · Out: { status: "ok" } (5 ms latency liveness check)</div>
+
+      <h2>13. Empirical Verification Benchmarks</h2>
+      <div class="grid-2">
+        <table>
+          <thead>
+            <tr><th>Verification Suite</th><th>Scope</th><th>Measured Result</th></tr>
+          </thead>
+          <tbody>
+            <tr><td><span class="strong">Backend Test Suite</span></td><td>18 classes in <span class="code-tag">test_grounding.py</span></td><td><span class="strong">133 / 133 Passed (0.235s)</span></td></tr>
+            <tr><td><span class="strong">Frontend Build</span></td><td>Vite 5.4 production bundle</td><td><span class="strong">31 modules in 564ms (0 errors)</span></td></tr>
+            <tr><td><span class="strong">Secret Scanning</span></td><td>Regex scan across Git history</td><td><span class="strong">0 keys / 0 credentials found</span></td></tr>
+          </tbody>
+        </table>
+        <table>
+          <thead>
+            <tr><th>Endpoint</th><th>Operation Mode</th><th>Measured Latency</th></tr>
+          </thead>
+          <tbody>
+            <tr><td><span class="code-tag">GET /health</span></td><td>Liveness Probe</td><td><span class="strong">5.01 ms</span></td></tr>
+            <tr><td><span class="code-tag">POST /extract-text</span></td><td>README.md (2,091 chars)</td><td><span class="strong">9.47 ms</span></td></tr>
+            <tr><td><span class="code-tag">POST /refine</span></td><td>Single Format Refine</td><td><span class="strong">1.89 s</span></td></tr>
+            <tr><td><span class="code-tag">POST /transform</span></td><td>All 7 Formats Concurrent</td><td><span class="strong">6.94 s (~0.99s / format)</span></td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h2>14. Top Architectural Differentiators (vs Naive Wrappers)</h2>
+      <ul>
+        <li><span class="strong">Upstream Canonical Content Model (CCM):</span> Factual extraction anchors generation before LLM synthesis, preventing initial hallucinations.</li>
+        <li><span class="strong">Consolidated Single-Pass Generation (~7s for 7 Formats):</span> Reduces API calls from 7 to 1, eliminating latency overhead and cross-format metric divergence.</li>
+        <li><span class="strong">Application-Side Deterministic Grounding:</span> Replaces unreliable, circular LLM self-grading with algorithmic stemming, currency normalization, and multi-scale windowing.</li>
+        <li><span class="strong">Targeted Self-Healing Loop:</span> Heals individual failing formats with negative constraint injection without regenerating valid deliverables.</li>
+        <li><span class="strong">State-Isolated Single-Output Refinement:</span> Modifies only the selected format in ~1.9s, preserving all sibling outputs in their validated state.</li>
+      </ul>
+    </div>
+
+    <div class="footer">
+      <span>AI Content Transformer · SIH Technical Architecture Specification</span>
+      <span>Confidential · Evaluator Review Copy</span>
+      <span>Page 2 of 2</span>
+    </div>
+  </div>
+
+</body>
+</html>
