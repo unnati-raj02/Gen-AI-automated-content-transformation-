@@ -61,6 +61,85 @@ class TransformRequest(BaseModel):
     )
 
 
+class CanonicalContentModel(BaseModel):
+    """
+    Canonical Content Model (Intermediate Representation) representing structured source information
+    prior to format-specific generation.
+    Captures verifiable entities, factual claims, metrics, dates, events, key messages,
+    risks/impacts, certifications/standards, and terminology while preserving source traceability.
+    """
+    source_reference: Optional[str] = Field(
+        default=None,
+        description="Source identifier or reference (e.g. document name, file reference, direct input)"
+    )
+    source_text: str = Field(
+        default="",
+        description="Original source text content preserved for full provenance and traceability"
+    )
+    entities: List[str] = Field(
+        default_factory=list,
+        description="Extracted named entities, organizations, or platform components"
+    )
+    claims: List[str] = Field(
+        default_factory=list,
+        description="Key factual propositions and substantive assertions extracted from source"
+    )
+    metrics: List[str] = Field(
+        default_factory=list,
+        description="Quantitative numbers, percentages, multipliers, and monetary values"
+    )
+    dates: List[str] = Field(
+        default_factory=list,
+        description="Temporal anchors, quarters, years, or calendar milestones"
+    )
+    events: List[str] = Field(
+        default_factory=list,
+        description="Verifiable event occurrences (e.g. launch, acquisition, certification, deployment)"
+    )
+    key_messages: List[str] = Field(
+        default_factory=list,
+        description="Core high-level takeaways or summary themes distilled from source"
+    )
+    risks_and_impacts: List[str] = Field(
+        default_factory=list,
+        description="Identified risks, threats, vulnerabilities, or operational impacts"
+    )
+    standards_and_certifications: List[str] = Field(
+        default_factory=list,
+        description="Industry standards, compliance benchmarks, and certifications (e.g. SOC2, ISO/IEC 27001)"
+    )
+    terminology: List[str] = Field(
+        default_factory=list,
+        description="Domain-specific technical terms, acronyms, and specialized nomenclature"
+    )
+
+    def to_canonical_context(self) -> str:
+        """
+        Returns a concise, structured textual representation of canonical source facts
+        usable across format-specific generation, prompt context, and validation.
+        """
+        lines = []
+        if self.source_reference:
+            lines.append(f"- Source Reference: {self.source_reference}")
+        if self.key_messages:
+            lines.append(f"- Key Messages: {'; '.join(self.key_messages)}")
+        if self.entities:
+            lines.append(f"- Entities: {', '.join(self.entities)}")
+        if self.metrics:
+            lines.append(f"- Metrics: {', '.join(self.metrics)}")
+        if self.dates:
+            lines.append(f"- Dates/Timeline: {', '.join(self.dates)}")
+        if self.events:
+            lines.append(f"- Events: {', '.join(self.events)}")
+        if self.standards_and_certifications:
+            lines.append(f"- Standards & Certifications: {', '.join(self.standards_and_certifications)}")
+        if self.risks_and_impacts:
+            lines.append(f"- Risks & Impacts: {'; '.join(self.risks_and_impacts)}")
+        if self.terminology:
+            lines.append(f"- Terminology: {', '.join(self.terminology)}")
+        return "\n".join(lines)
+
+
 class TransformResponse(BaseModel):
     """
     Response schema for the /transform endpoint.
@@ -81,6 +160,22 @@ class TransformResponse(BaseModel):
     provenance: Dict[str, Any] = Field(
         default_factory=dict,
         description="Structured per-output provenance and traceability records"
+    )
+    canonical_content: Optional[CanonicalContentModel] = Field(
+        default=None,
+        description="Canonical Content Model (Intermediate Representation) representing extracted source information"
+    )
+    cross_format_consistency: Optional[Dict[str, Any]] = Field(
+        default=None,
+        description="Cross-format consistency validation report comparing facts across all generated formats"
+    )
+    quality_score: Optional[Dict[str, Any]] = Field(
+        default=None,
+        description="Deterministic explainable quality and confidence score breakdown"
+    )
+    quality_gate: Optional[Dict[str, Any]] = Field(
+        default=None,
+        description="Final quality gate evaluation status and threshold report"
     )
 
 
@@ -175,4 +270,20 @@ class RefineResponse(BaseModel):
     provenance: Dict[str, Any] = Field(
         default_factory=dict,
         description="Structured provenance and traceability record for the refined output"
+    )
+    canonical_content: Optional[CanonicalContentModel] = Field(
+        default=None,
+        description="Canonical Content Model (Intermediate Representation) of the source content"
+    )
+    cross_format_consistency: Optional[Dict[str, Any]] = Field(
+        default=None,
+        description="Consistency validation report for the refined output"
+    )
+    quality_score: Optional[Dict[str, Any]] = Field(
+        default=None,
+        description="Deterministic explainable quality and confidence score breakdown"
+    )
+    quality_gate: Optional[Dict[str, Any]] = Field(
+        default=None,
+        description="Final quality gate evaluation status"
     )

@@ -6,7 +6,7 @@ unsupported qualitative/quantitative hallucinations, and existing metric regress
 
 import unittest
 from unittest.mock import MagicMock
-from schemas.transform_schema import TransformRequest
+from schemas.transform_schema import TransformRequest, RefineRequest, CanonicalContentModel
 from services.transform_service import (
     verify_factual_grounding,
     validate_output,
@@ -16,7 +16,14 @@ from services.transform_service import (
     _split_into_claim_candidates,
     build_recovery_prompt,
     should_trigger_recovery,
-    validate_and_recover_outputs
+    validate_and_recover_outputs,
+    build_canonical_content_model,
+    mock_transform_content,
+    mock_refine_content,
+    validate_cross_format_consistency,
+    calculate_quality_score,
+    evaluate_quality_gate,
+    build_claim_level_provenance
 )
 
 CYBERSHIELD_SOURCE = (
@@ -2109,6 +2116,483 @@ class TestLinkedInPostFormatValidation(unittest.TestCase):
         self.assertEqual(len(val["issues"]), 0, f"Unexpected issues in clean LinkedIn Post: {val['issues']}")
         self.assertTrue(val["factual_grounding"]["is_grounded"])
         self.assertFalse(should_trigger_recovery(val), "Clean valid LinkedIn Post should not trigger recovery")
+
+
+class TestCanonicalContentModel(unittest.TestCase):
+    """
+    Test suite for the Canonical Content Model (intermediate representation).
+    Validates deterministic extraction, metrics preservation, entity/fact preservation,
+    optional/empty fields handling, and compatibility with the /transform and /refine flows.
+    """
+
+    def test_canonical_model_creation_from_normal_source(self):
+        """Verifies canonical model creation from standard CyberShield source text."""
+        model = build_canonical_content_model(
+            source_text=CYBERSHIELD_SOURCE,
+            source_reference="cybershield_whitepaper.pdf"
+        )
+        self.assertIsInstance(model, CanonicalContentModel)
+        self.assertEqual(model.source_reference, "cybershield_whitepaper.pdf")
+        self.assertEqual(model.source_text, CYBERSHIELD_SOURCE)
+
+        # Entities
+        self.assertTrue(any("CyberShield" in e for e in model.entities), f"Entities: {model.entities}")
+
+        # Metrics
+        self.assertIn("68%", model.metrics)
+        self.assertIn("99.4%", model.metrics)
+
+        # Dates / Timeline
+        self.assertTrue(any("Q1 2026" in d or "2026" in d for d in model.dates), f"Dates: {model.dates}")
+
+        # Events
+        self.assertTrue(any("launch" in ev.lower() or "initiat" in ev.lower() for ev in model.events), f"Events: {model.events}")
+        self.assertTrue(any("certif" in ev.lower() for ev in model.events), f"Events: {model.events}")
+
+        # Standards and Certifications
+        self.assertTrue(any("SOC2" in s for s in model.standards_and_certifications), f"Standards: {model.standards_and_certifications}")
+        self.assertTrue(any("27001" in s for s in model.standards_and_certifications), f"Standards: {model.standards_and_certifications}")
+
+        # Substantive Claims
+        self.assertGreaterEqual(len(model.claims), 3)
+
+        # Risks & Impacts
+        self.assertTrue(any("threat" in r.lower() or "vulnerabilit" in r.lower() for r in model.risks_and_impacts), f"Risks: {model.risks_and_impacts}")
+
+        # Key Messages
+        self.assertGreaterEqual(len(model.key_messages), 1)
+
+        # Terminology
+        self.assertTrue(len(model.terminology) > 0, f"Terminology: {model.terminology}")
+
+        # Canonical context string representation
+        ctx = model.to_canonical_context()
+        self.assertIn("Source Reference: cybershield_whitepaper.pdf", ctx)
+        self.assertIn("68%", ctx)
+        self.assertIn("SOC2", ctx)
+
+    def test_metrics_extraction_and_preservation(self):
+        """Verifies exact extraction and preservation of percentages, currencies, multipliers, and units."""
+        text = (
+            "In fiscal year 2025, Acme Cloud generated $42.5 million in revenue (up 3.8x year-over-year) "
+            "with 99.95% availability across 1,200 server nodes, achieving average latency of 14ms."
+        )
+        model = build_canonical_content_model(text, source_reference="acme_q4.txt")
+
+        # Percentages
+        self.assertIn("99.95%", model.metrics)
+        # Currency
+        self.assertTrue(any("$42.5 million" in m or "$42.5" in m for m in model.metrics), f"Metrics: {model.metrics}")
+        # Multiplier
+        self.assertTrue(any("3.8x" in m.lower() for m in model.metrics), f"Metrics: {model.metrics}")
+        # Rate / latency
+        self.assertTrue(any("14ms" in m.lower() for m in model.metrics), f"Metrics: {model.metrics}")
+        # Quantity with units
+        self.assertTrue(any("1,200 server nodes" in m.lower() or "server nodes" in m.lower() for m in model.metrics), f"Metrics: {model.metrics}")
+
+    def test_entities_and_facts_preservation(self):
+        """Verifies named entities, compound enterprise entities, and factual events are preserved."""
+        text = (
+            "Munich-based German cybersecurity firm SecuFlow announced a major partnership with Apex Systems in 2026. "
+            "The company successfully completed its deployment across European enterprise networks."
+        )
+        model = build_canonical_content_model(text)
+
+        # Entities
+        self.assertTrue(any("SecuFlow" in e or "Apex Systems" in e or "cybersecurity firm" in e.lower() for e in model.entities), f"Entities: {model.entities}")
+
+        # Events
+        self.assertTrue(any("partnership" in ev.lower() for ev in model.events), f"Events: {model.events}")
+        self.assertTrue(any("deployment" in ev.lower() for ev in model.events), f"Events: {model.events}")
+
+        # Claims preservation
+        self.assertGreaterEqual(len(model.claims), 2)
+        self.assertTrue(any("SecuFlow" in c for c in model.claims))
+
+    def test_empty_and_optional_fields(self):
+        """Verifies that empty sources or sources without metrics/dates do not force fields."""
+        # Empty string
+        empty_model = build_canonical_content_model("")
+        self.assertEqual(empty_model.source_text, "")
+        self.assertEqual(empty_model.entities, [])
+        self.assertEqual(empty_model.claims, [])
+        self.assertEqual(empty_model.metrics, [])
+        self.assertEqual(empty_model.dates, [])
+        self.assertEqual(empty_model.events, [])
+        self.assertEqual(empty_model.key_messages, [])
+        self.assertEqual(empty_model.risks_and_impacts, [])
+        self.assertEqual(empty_model.standards_and_certifications, [])
+        self.assertEqual(empty_model.terminology, [])
+        self.assertEqual(empty_model.to_canonical_context(), "")
+
+        # Whitespace
+        whitespace_model = build_canonical_content_model("   \n\t   ")
+        self.assertEqual(whitespace_model.metrics, [])
+        self.assertEqual(whitespace_model.claims, [])
+
+        # Narrative without metrics, dates, or certifications
+        narrative = "The engineering team met to review code quality and discuss internal workflow improvements."
+        narrative_model = build_canonical_content_model(narrative)
+        self.assertEqual(narrative_model.metrics, [], "Should not force metrics when none exist")
+        self.assertEqual(narrative_model.dates, [], "Should not force dates when none exist")
+        self.assertEqual(narrative_model.standards_and_certifications, [], "Should not force standards when none exist")
+        self.assertGreaterEqual(len(narrative_model.claims), 1)
+
+    def test_compatibility_with_transform_flow(self):
+        """Verifies that mock_transform_content embeds CanonicalContentModel seamlessly without regression."""
+        req = TransformRequest(
+            source_content=CYBERSHIELD_SOURCE,
+            output_types=["Executive Summary", "LinkedIn Post"],
+            target_audience="C-Suite Executives",
+            tone="Professional",
+            document_name="cybershield_doc.txt"
+        )
+        res = mock_transform_content(req)
+
+        # Existing response structure remains identical
+        self.assertEqual(res.status, "success")
+        self.assertIn("Executive Summary", res.outputs)
+        self.assertIn("LinkedIn Post", res.outputs)
+        self.assertIn("provenance", res.metadata)
+        self.assertIn("Executive Summary", res.provenance)
+
+        # Canonical Content Model is present and fully structured
+        self.assertIsNotNone(res.canonical_content)
+        self.assertIsInstance(res.canonical_content, CanonicalContentModel)
+        self.assertEqual(res.canonical_content.source_reference, "cybershield_doc.txt")
+        self.assertIn("68%", res.canonical_content.metrics)
+
+        # Metadata dictionary includes canonical_content for backward-compatible clients
+        self.assertIn("canonical_content", res.metadata)
+        self.assertIsInstance(res.metadata["canonical_content"], dict)
+        self.assertEqual(res.metadata["canonical_content"]["source_reference"], "cybershield_doc.txt")
+        self.assertIn("68%", res.metadata["canonical_content"]["metrics"])
+
+    def test_compatibility_with_refine_flow(self):
+        """Verifies that mock_refine_content embeds CanonicalContentModel seamlessly."""
+        req = RefineRequest(
+            source_content=CYBERSHIELD_SOURCE,
+            output_type="LinkedIn Post",
+            current_output="[MOCK GENERATION - LINKEDIN POST]\nInitial text.",
+            refinement_instruction="Make the hook more impactful and highlight SOC2 compliance."
+        )
+        res = mock_refine_content(req)
+
+        self.assertEqual(res.status, "success")
+        self.assertEqual(res.output_type, "LinkedIn Post")
+        self.assertIsNotNone(res.canonical_content)
+        self.assertIsInstance(res.canonical_content, CanonicalContentModel)
+        self.assertIn("canonical_content", res.metadata)
+        self.assertIn("68%", res.canonical_content.metrics)
+
+
+class TestCrossFormatConsistencyAndQualityGate(unittest.TestCase):
+    """
+    Dedicated test suite for:
+    1. Cross-format consistency validation (metrics, percentages, dates, entities, standards)
+    2. Claim-level provenance (Source fact -> Canonical fact -> Generated claim -> Status)
+    3. Deterministic explainable quality and confidence scoring
+    4. Final Quality Gate evaluation and pipeline integration
+    5. Compatibility with targeted recovery, /transform, and /refine
+    """
+
+    def setUp(self):
+        self.source = CYBERSHIELD_SOURCE
+        self.canonical_model = build_canonical_content_model(self.source, "cybershield_source.txt")
+
+    def test_matching_metrics_across_formats_passes(self):
+        """Matching canonical metrics (68%) across multiple generated formats -> PASS."""
+        outputs = {
+            "LinkedIn Post": "Automated detection reduced threat response times by 68% in Q1 2026. #CyberSecurity",
+            "Twitter/X Post": "Threat response times reduced by 68% with automated detection! 🧵 1/2",
+            "Presentation": "Slide 1: Key Metric - Threat response times reduced by 68% across all environments.",
+            "Video Script": "Scene 1: Threat response times were cut by 68%."
+        }
+        report = validate_cross_format_consistency(outputs, self.canonical_model)
+        self.assertTrue(report["consistent"], f"Expected consistent report, got: {report}")
+        self.assertEqual(len(report["contradictions"]), 0)
+        self.assertEqual(report["overall_consistency_score"], 1.0)
+        for ot in outputs:
+            self.assertEqual(report["format_consistency_scores"][ot], 1.0)
+
+    def test_mismatched_metric_detected_as_contradiction(self):
+        """Mismatched metric (65% instead of 68%) -> Contradiction flagged with expected vs observed."""
+        outputs = {
+            "LinkedIn Post": "Threat response reduced by 68% with automated detection.",
+            "Twitter/X Post": "Threat response reduced by 68%.",
+            "Presentation": "Threat response reduced by 68%.",
+            "Video Script": "Threat response reduced by 65% across multi-cloud infrastructure."  # Contradiction!
+        }
+        report = validate_cross_format_consistency(outputs, self.canonical_model)
+        self.assertFalse(report["consistent"])
+        self.assertGreaterEqual(report["contradiction_count"], 1)
+
+        metric_contras = [c for c in report["contradictions"] if c["element_type"] == "metric"]
+        self.assertEqual(len(metric_contras), 1)
+        contra = metric_contras[0]
+        self.assertEqual(contra["observed_value"], "65%")
+        self.assertEqual(contra["expected_value"], "68%")
+        self.assertEqual(contra["affected_format"], "Video Script")
+        self.assertEqual(contra["severity"], "error")
+        self.assertEqual(contra["source_reference"], "cybershield_source.txt")
+        self.assertLess(report["format_consistency_scores"]["Video Script"], 1.0)
+
+    def test_mismatched_date_detected_as_contradiction(self):
+        """Mismatched quarter/date (Q3 2025 or 2024 instead of Q1 2026) -> Contradiction flagged."""
+        outputs = {
+            "Executive Summary": "Project CyberShield was initiated in Q3 2025 to safeguard infrastructure.",
+            "LinkedIn Post": "Initiated in Q1 2026 to safeguard cloud infrastructure."
+        }
+        report = validate_cross_format_consistency(outputs, self.canonical_model)
+        self.assertFalse(report["consistent"])
+        date_contras = [c for c in report["contradictions"] if c["element_type"] == "date"]
+        self.assertGreaterEqual(len(date_contras), 1)
+        dc = date_contras[0]
+        self.assertEqual(dc["affected_format"], "Executive Summary")
+        self.assertIn("2025", dc["observed_value"])
+        self.assertEqual(dc["expected_value"], "Q1 2026")
+        self.assertEqual(dc["severity"], "error")
+
+    def test_mismatched_standard_and_entity_detected(self):
+        """Mismatched standard or unsupported entity -> Contradiction flagged."""
+        # Test standard mismatch: "SOC 1" instead of "SOC2 Type II"
+        outputs = {
+            "Advisory": "Adheres to SOC 1 Type I certification and ISO/IEC 27001 standards."
+        }
+        report = validate_cross_format_consistency(outputs, self.canonical_model)
+        std_contras = [c for c in report["contradictions"] if c["element_type"] == "standard"]
+        self.assertGreaterEqual(len(std_contras), 1)
+        self.assertIn("SOC 1", std_contras[0]["observed_value"])
+        self.assertEqual(std_contras[0]["affected_format"], "Advisory")
+        self.assertEqual(std_contras[0]["severity"], "error")
+
+        # Test unsupported entity passed via validation_results
+        val_results = {
+            "LinkedIn Post": {
+                "valid": True,
+                "severity": "none",
+                "factual_grounding": {
+                    "is_grounded": False,
+                    "unsupported_entities": ["Acme Corp Global"],
+                    "unverified_metrics": [],
+                    "unsupported_events": [],
+                    "unsupported_claims": ["Acme Corp Global acquired CyberShield"]
+                }
+            }
+        }
+        report2 = validate_cross_format_consistency(
+            {"LinkedIn Post": "Acme Corp Global acquired CyberShield in Q1 2026."},
+            self.canonical_model,
+            validation_results=val_results
+        )
+        entity_contras = [c for c in report2["contradictions"] if c["element_type"] == "entity"]
+        self.assertEqual(len(entity_contras), 1)
+        self.assertEqual(entity_contras[0]["observed_value"], "Acme Corp Global")
+        self.assertEqual(entity_contras[0]["affected_format"], "LinkedIn Post")
+
+    def test_claim_level_provenance_structure_and_status(self):
+        """Verifies claim-level provenance mapping: Source fact -> Canonical fact -> Claim -> Status."""
+        text = (
+            "Project CyberShield is an enterprise framework initiated in Q1 2026. "
+            "Automated detection reduced threat response times by 68%. "
+            "We also introduced ungrounded blockchain ledgers."
+        )
+        val_result = {
+            "factual_grounding": {
+                "is_grounded": False,
+                "unsupported_claims": ["We also introduced ungrounded blockchain ledgers."],
+                "unverified_metrics": []
+            }
+        }
+        claims_prov = build_claim_level_provenance(
+            output_type="LinkedIn Post",
+            output_text=text,
+            canonical_model=self.canonical_model,
+            validation_result=val_result
+        )
+        self.assertGreaterEqual(len(claims_prov), 2)
+        for record in claims_prov:
+            self.assertIn("claim", record)
+            self.assertIn("canonical_fact", record)
+            self.assertIn("source_reference", record)
+            self.assertIn("output_format", record)
+            self.assertIn("status", record)
+            self.assertEqual(record["output_format"], "LinkedIn Post")
+            self.assertEqual(record["source_reference"], "cybershield_source.txt")
+
+        # Check statuses
+        verified_claims = [r for r in claims_prov if r["status"] == "verified"]
+        unsupported_claims = [r for r in claims_prov if r["status"] == "unsupported"]
+        self.assertGreaterEqual(len(verified_claims), 1)
+        self.assertGreaterEqual(len(unsupported_claims), 1)
+
+    def test_deterministic_quality_score_weights_and_calculation(self):
+        """Verifies deterministic explainable quality score with exact documented weights."""
+        clean_val = {
+            "valid": True,
+            "severity": "none",
+            "issues": [],
+            "factual_grounding": {
+                "is_grounded": True,
+                "claim_grounding_score": 1.0,
+                "unverified_metrics": [],
+                "unsupported_events": [],
+                "unsupported_entities": []
+            }
+        }
+        # Perfect score when validation is clean and consistency is 1.0
+        score = calculate_quality_score(clean_val, consistency_score=1.0, contradiction_count=0)
+        self.assertEqual(score["overall_score"], 1.0)
+        self.assertEqual(score["grounding"], 1.0)
+        self.assertEqual(score["structure"], 1.0)
+        self.assertEqual(score["consistency"], 1.0)
+        self.assertEqual(score["compliance"], 1.0)
+        self.assertEqual(score["weights"]["grounding"], 0.35)
+        self.assertEqual(score["weights"]["structure"], 0.25)
+        self.assertEqual(score["weights"]["consistency"], 0.25)
+        self.assertEqual(score["weights"]["compliance"], 0.15)
+
+        # Degraded score when unverified metrics and contradictions exist
+        degraded_val = {
+            "valid": False,
+            "severity": "error",
+            "issues": ["Structural failure: Missing required section."],
+            "factual_grounding": {
+                "is_grounded": False,
+                "claim_grounding_score": 0.5,
+                "unverified_metrics": ["999%"],
+                "unsupported_events": [],
+                "unsupported_entities": []
+            }
+        }
+        degraded_score = calculate_quality_score(degraded_val, consistency_score=0.70, contradiction_count=1)
+        self.assertLess(degraded_score["overall_score"], 0.70)
+        self.assertLess(degraded_score["grounding"], 1.0)
+        self.assertLess(degraded_score["structure"], 1.0)
+        self.assertLess(degraded_score["consistency"], 1.0)
+
+    def test_quality_gate_pass_and_fail(self):
+        """Verifies Quality Gate evaluation: PASS when threshold met without errors, FAIL otherwise."""
+        # PASS scenario
+        quality_scores = {
+            "LinkedIn Post": {"overall_score": 0.95},
+            "Executive Summary": {"overall_score": 0.92}
+        }
+        consistency_clean = {"contradictions": []}
+        gate_result = evaluate_quality_gate(quality_scores, consistency_clean, threshold=0.80)
+        self.assertTrue(gate_result["gate_passed"])
+        self.assertEqual(gate_result["failing_formats"], [])
+        self.assertGreaterEqual(gate_result["overall_quality_score"], 0.80)
+
+        # FAIL scenario due to low score
+        quality_scores_low = {
+            "LinkedIn Post": {"overall_score": 0.95},
+            "Executive Summary": {"overall_score": 0.65}  # Below 0.80 threshold
+        }
+        gate_result_low = evaluate_quality_gate(quality_scores_low, consistency_clean, threshold=0.80)
+        self.assertFalse(gate_result_low["gate_passed"])
+        self.assertIn("Executive Summary", gate_result_low["failing_formats"])
+        self.assertFalse(gate_result_low["per_format_gate"]["Executive Summary"]["passed"])
+
+        # FAIL scenario due to severe contradiction
+        consistency_with_error = {
+            "contradictions": [
+                {
+                    "affected_format": "LinkedIn Post",
+                    "severity": "error",
+                    "element_type": "metric",
+                    "observed_value": "42%",
+                    "expected_value": "68%"
+                }
+            ]
+        }
+        gate_result_contra = evaluate_quality_gate(quality_scores, consistency_with_error, threshold=0.80)
+        self.assertFalse(gate_result_contra["gate_passed"])
+        self.assertIn("LinkedIn Post", gate_result_contra["failing_formats"])
+
+    def test_compatibility_with_existing_targeted_recovery(self):
+        """Verifies that validate_and_recover_outputs flags failed formats and feeds contradictions into recovery."""
+        req = TransformRequest(
+            source_content=self.source,
+            output_types=["Executive Summary", "LinkedIn Post"]
+        )
+        # Executive Summary valid, LinkedIn Post has contradiction (65% instead of 68%)
+        outputs = {
+            "Executive Summary": (
+                "## Executive Overview\n"
+                "Project CyberShield is an enterprise cybersecurity framework initiated in Q1 2026.\n\n"
+                "## Key Findings\n"
+                "Automated detection reduced threat response times by 68% during internal pilot testing."
+            ),
+            "LinkedIn Post": "Threat response times reduced by 65% in Q1 2026. #Tech"  # Contradiction
+        }
+        out, val_report = validate_and_recover_outputs(
+            outputs=outputs,
+            request=req,
+            model=None,
+            multimodal_parts=[],
+            canonical_model=self.canonical_model
+        )
+        self.assertIn("cross_format_consistency", val_report)
+        self.assertIn("quality_scores", val_report)
+        self.assertIn("quality_gate", val_report)
+        self.assertIn("claim_provenance", val_report)
+        # LinkedIn Post failed quality gate due to contradiction
+        self.assertIn("LinkedIn Post", val_report["quality_gate"]["failing_formats"])
+        self.assertNotIn("Executive Summary", val_report["quality_gate"]["failing_formats"])
+
+    def test_transform_flow_quality_gate_integration(self):
+        """Verifies /transform (mock_transform_content) produces full quality gate and consistency report."""
+        req = TransformRequest(
+            source_content=self.source,
+            output_types=["Executive Summary", "LinkedIn Post", "Twitter/X Post"],
+            target_audience="Executive Leadership",
+            tone="Professional",
+            document_name="cybershield_brief.txt"
+        )
+        res = mock_transform_content(req)
+        self.assertEqual(res.status, "success")
+        self.assertIsNotNone(res.cross_format_consistency)
+        self.assertIn("consistent", res.cross_format_consistency)
+        self.assertIsNotNone(res.quality_score)
+        self.assertIn("overall_score", res.quality_score)
+        self.assertIsNotNone(res.quality_gate)
+        self.assertIn("gate_passed", res.quality_gate)
+        self.assertIn("per_format_gate", res.quality_gate)
+
+        # Metadata dictionary backward compatibility
+        self.assertIn("cross_format_consistency", res.metadata)
+        self.assertIn("quality_score", res.metadata)
+        self.assertIn("quality_gate", res.metadata)
+
+        # Provenance contains claim_provenance and quality_score for every format
+        for ot in ["Executive Summary", "LinkedIn Post", "Twitter/X Post"]:
+            self.assertIn(ot, res.provenance)
+            prov = res.provenance[ot]
+            self.assertIn("claim_provenance", prov)
+            self.assertIsInstance(prov["claim_provenance"], list)
+            self.assertIn("quality_score", prov)
+            self.assertIn("overall_score", prov["quality_score"])
+
+    def test_refine_flow_quality_gate_integration(self):
+        """Verifies /refine (mock_refine_content) produces quality gate, consistency report, and claim provenance."""
+        req = RefineRequest(
+            source_content=self.source,
+            output_type="LinkedIn Post",
+            current_output="[MOCK GENERATION - LINKEDIN POST]\nInitial text.",
+            refinement_instruction="Emphasize the 68% threat response reduction."
+        )
+        res = mock_refine_content(req)
+        self.assertEqual(res.status, "success")
+        self.assertEqual(res.output_type, "LinkedIn Post")
+        self.assertIsNotNone(res.cross_format_consistency)
+        self.assertIsNotNone(res.quality_score)
+        self.assertIsNotNone(res.quality_gate)
+        self.assertIn("claim_provenance", res.provenance)
+        self.assertIn("quality_score", res.provenance)
+        self.assertIn("cross_format_consistency", res.metadata)
+        self.assertIn("quality_score", res.metadata)
+        self.assertIn("quality_gate", res.metadata)
 
 
 if __name__ == "__main__":

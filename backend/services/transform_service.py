@@ -14,7 +14,13 @@ import google.generativeai as genai
 from dotenv import load_dotenv
 from fastapi import HTTPException
 
-from schemas.transform_schema import TransformRequest, TransformResponse, RefineRequest, RefineResponse
+from schemas.transform_schema import (
+    TransformRequest,
+    TransformResponse,
+    RefineRequest,
+    RefineResponse,
+    CanonicalContentModel,
+)
 from services.document_service import validate_extracted_content
 
 # Load environment variables from .env file (if present)
@@ -213,7 +219,8 @@ def build_consolidated_prompt(
     content_style: Optional[str] = None,
     document_name: Optional[str] = None,
     image_name: Optional[str] = None,
-    video_name: Optional[str] = None
+    video_name: Optional[str] = None,
+    canonical_model: Optional[CanonicalContentModel] = None
 ) -> str:
     """
     Constructs a unified prompt instructing the LLM to generate all requested
@@ -222,6 +229,12 @@ def build_consolidated_prompt(
     doc_spec = f"\n- Source Document Name: {document_name}" if document_name else ""
     img_spec = f"\n- Attached Source Image: {image_name} (Analyze and synthesize all visual charts, diagrams, graphics, and text from the image)" if image_name else ""
     vid_spec = f"\n- Attached Source Video: {video_name} (Thoroughly examine visual narrative, scene progression, demonstrations, on-screen text, and spoken audio in the video)" if video_name else ""
+
+    canonical_section = ""
+    if canonical_model:
+        c_ctx = canonical_model.to_canonical_context()
+        if c_ctx:
+            canonical_section = f"\nCANONICAL SOURCE MODEL (INTERMEDIATE REPRESENTATION):\n{c_ctx}\n"
 
     format_specs = []
     for i, ot in enumerate(output_types, 1):
@@ -248,7 +261,7 @@ SOURCE CONTENT:
 \"\"\"
 {source_content}
 \"\"\"
-
+{canonical_section}
 OUTPUT FORMAT REQUIREMENTS:
 You MUST respond with a single, valid JSON object containing exactly one key for each requested artefact.
 Schema structure:
@@ -787,9 +800,15 @@ def extract_key_factual_tokens(text: str) -> set:
         facts.add(m.group(0).lower())
 
     # 5. Specific compliance standards and named enterprise entities
-    for m in re.finditer(r"\b(?:SOC\s*2|ISO\s*(?:27001|IEC)?|Zero-Trust|CI/CD)\b", text, re.IGNORECASE):
-        clean_std = re.sub(r"\s+", "", m.group(0)).upper()
+    for m in re.finditer(r"\b(?:SOC\s*[12](?:\s*Type\s*[I|II|1|2]+)?|ISO(?:\s*(?:/\s*IEC)?\s*27001|27001|\s*/\s*IEC)?|Zero-Trust|CI/CD)\b", text, re.IGNORECASE):
+        raw = m.group(0)
+        clean_std = re.sub(r"\s+", "", raw).upper()
         facts.add(clean_std)
+        if "SOC" in clean_std:
+            facts.add("SOC2")
+        if "27001" in raw:
+            facts.add("ISO27001")
+            facts.add("27001")
 
     return facts
 
@@ -1267,6 +1286,190 @@ def _verify_claims_against_source(
 
     score = len(supported) / len(claims) if claims else 1.0
     return supported, unsupported, unsupported_events, unsupported_entities, unverified_metrics, score
+
+
+def build_canonical_content_model(
+    source_text: str,
+    source_reference: Optional[str] = None
+) -> CanonicalContentModel:
+    """
+    Constructs a lightweight Canonical Content Model (intermediate representation)
+    from source content deterministically before format-specific generation.
+    Extracts entities, claims, metrics, dates, events, key messages, risks/impacts,
+    standards/certifications, and terminology without calling Gemini.
+    """
+    if not source_text or not source_text.strip():
+        return CanonicalContentModel(
+            source_reference=source_reference,
+            source_text=source_text or "",
+            entities=[],
+            claims=[],
+            metrics=[],
+            dates=[],
+            events=[],
+            key_messages=[],
+            risks_and_impacts=[],
+            standards_and_certifications=[],
+            terminology=[]
+        )
+
+    text = source_text.strip()
+
+    # 1. Claims: substantive propositional factual statements from source
+    raw_claims = _split_into_claim_candidates(text)
+    claims: List[str] = []
+    seen_claims: Set[str] = set()
+    for c in raw_claims:
+        clean_c = c.strip()
+        if clean_c and clean_c.lower() not in seen_claims:
+            seen_claims.add(clean_c.lower())
+            claims.append(clean_c)
+
+    # 2. Standards & Certifications
+    std_regex = re.compile(
+        r'\b(?:SOC\s*2(?:\s+Type\s+(?:I|II))?|ISO(?:/IEC)?(?:\s*27001)?|GDPR|HIPAA|PCI-DSS|NIST(?:\s+CSF)?|FedRAMP|CIS\s+Controls?|Zero[- ]Trust|CI/CD)\b',
+        re.IGNORECASE
+    )
+    standards: List[str] = []
+    seen_stds: Set[str] = set()
+    for m in std_regex.finditer(text):
+        val = re.sub(r'\s+', ' ', m.group(0)).strip()
+        if val.lower() not in seen_stds:
+            seen_stds.add(val.lower())
+            standards.append(val)
+
+    # 3. Metrics & Numbers (percentages, currencies, multipliers, rates, and explicit measured quantities)
+    metrics: List[str] = []
+    seen_metrics: Set[str] = set()
+    # Percentages
+    for m in re.finditer(r'\b\d+(?:\.\d+)?%', text):
+        val = m.group(0)
+        if val.lower() not in seen_metrics:
+            seen_metrics.add(val.lower())
+            metrics.append(val)
+    # Currencies
+    for m in CURRENCY_REGEX.finditer(text):
+        val = re.sub(r'\s+', ' ', m.group(0)).strip()
+        if val.lower() not in seen_metrics:
+            seen_metrics.add(val.lower())
+            metrics.append(val)
+    # Multipliers, data rates, latency
+    for m in re.finditer(r'\b\d+(?:\.\d+)?(?:x|X|mb|gb|ms|k|m|b)\b', text, re.IGNORECASE):
+        val = m.group(0)
+        if val.lower() not in seen_metrics:
+            seen_metrics.add(val.lower())
+            metrics.append(val)
+    # Explicit measured units
+    for m in re.finditer(r'\b\d+(?:,\d{3})*(?:\.\d+)?\s*(?:(?:server\s+)?nodes?|servers?|endpoints?|users?|seconds?|minutes?|hours?|days?|percent)\b', text, re.IGNORECASE):
+        val = re.sub(r'\s+', ' ', m.group(0)).strip()
+        if val.lower() not in seen_metrics:
+            seen_metrics.add(val.lower())
+            metrics.append(val)
+
+    # 4. Dates & Time references (quarters, years, calendar dates)
+    dates: List[str] = []
+    seen_dates: Set[str] = set()
+    for m in re.finditer(r'\bQ[1-4]\s*20\d\d\b', text, re.IGNORECASE):
+        val = re.sub(r'\s+', ' ', m.group(0)).strip()
+        if val.lower() not in seen_dates:
+            seen_dates.add(val.lower())
+            dates.append(val)
+    for m in re.finditer(r'\b(?:January|February|March|April|May|June|July|August|September|October|November|December)\s+\d{1,2}(?:,\s+\d{4})?\b', text, re.IGNORECASE):
+        val = re.sub(r'\s+', ' ', m.group(0)).strip()
+        if val.lower() not in seen_dates:
+            seen_dates.add(val.lower())
+            dates.append(val)
+    for m in re.finditer(r'\b\d{4}-\d{2}-\d{2}\b', text):
+        val = m.group(0)
+        if val.lower() not in seen_dates:
+            seen_dates.add(val.lower())
+            dates.append(val)
+    for m in re.finditer(r'\b(?:19|20)\d\d\b', text):
+        val = m.group(0)
+        if not any(val in d for d in dates) and val.lower() not in seen_dates:
+            seen_dates.add(val.lower())
+            dates.append(val)
+
+    # 5. Events
+    events: List[str] = []
+    seen_events: Set[str] = set()
+    for evt_name in FACTUAL_EVENT_PATTERNS:
+        if is_factual_event_present(evt_name, text):
+            pat = FACTUAL_EVENT_PATTERNS[evt_name]
+            match = pat.search(text)
+            matched_phrase = match.group(0) if match else evt_name
+            entry = f"{evt_name.capitalize()} ({matched_phrase})"
+            if entry not in seen_events:
+                seen_events.add(entry)
+                events.append(entry)
+
+    # 6. Entities (Organizations, platforms, compound enterprise entities)
+    entities: List[str] = []
+    seen_entities: Set[str] = set()
+    for pat in COMPOUND_ENTITY_PATTERNS:
+        for m in pat.finditer(text):
+            ent = re.sub(r'\s+', ' ', m.group(0)).strip()
+            ent_lower = ent.lower()
+            # Skip if matches a standard/certification
+            if any(ent_lower == s.lower() or ent_lower in s.lower() for s in standards):
+                continue
+            # Skip if all tokens are generic formatting/structural words
+            tokens = [t.lower() for t in re.findall(r'[a-zA-Z0-9]+', ent)]
+            if all(t in GENERIC_ENTITY_TOKENS for t in tokens):
+                continue
+            if ent_lower not in seen_entities and len(ent) > 2:
+                seen_entities.add(ent_lower)
+                entities.append(ent)
+
+    # 7. Risks & Impacts
+    risk_regex = re.compile(r'(?i)\b(?:risk|threat|vulnerability|exposure|impact|incident|hazard|latency|breach|outage|failure)\b')
+    risks: List[str] = []
+    for c in claims:
+        if risk_regex.search(c) and c not in risks:
+            risks.append(c)
+
+    # 8. Key Messages
+    if len(claims) <= 3:
+        key_messages = list(claims)
+    else:
+        key_messages = [claims[0]]
+        for c in claims[1:]:
+            if len(key_messages) >= 3:
+                break
+            if any(m.lower() in c.lower() for m in metrics) or c in risks:
+                key_messages.append(c)
+        if len(key_messages) < 3 and len(claims) > 1:
+            for c in claims[1:3]:
+                if c not in key_messages and len(key_messages) < 3:
+                    key_messages.append(c)
+
+    # 9. Terminology: technical acronyms, slash compounds, and hyphenated compounds
+    term_regex = re.compile(r'\b(?:[A-Za-z0-9]+/[A-Za-z0-9]+|[A-Za-z0-9]+-[A-Za-z0-9]+|[A-Z]{3,6}\d?|AI|ML|CI|CD|IP|OS|UI|UX|IT)\b')
+    terms: List[str] = []
+    seen_terms: Set[str] = set()
+    stop_caps = {'THE', 'AND', 'FOR', 'ARE', 'BUT', 'NOT', 'YOU', 'ALL', 'ANY', 'CAN', 'HAD', 'HER', 'WAS', 'ONE', 'OUR', 'OUT', 'DAY', 'GET', 'HAS', 'HIM', 'HIS', 'HOW', 'MAN', 'NEW', 'NOW', 'OLD', 'SEE', 'TWO', 'WAY', 'WHO', 'BOY', 'DID', 'ITS', 'LET', 'PUT', 'SAY', 'SHE', 'TOO', 'USE'}
+    for m in term_regex.finditer(text):
+        val = m.group(0).strip()
+        val_upper = val.upper()
+        if val_upper in stop_caps:
+            continue
+        if val.lower() not in seen_terms and not any(val.lower() == d.lower() or val.lower() in d.lower() for d in dates):
+            seen_terms.add(val.lower())
+            terms.append(val)
+
+    return CanonicalContentModel(
+        source_reference=source_reference or f"Direct Input ({len(text)} chars)",
+        source_text=text,
+        entities=entities,
+        claims=claims,
+        metrics=metrics,
+        dates=dates,
+        events=events,
+        key_messages=key_messages,
+        risks_and_impacts=risks,
+        standards_and_certifications=standards,
+        terminology=terms
+    )
 
 
 def verify_factual_grounding(source_text: str, output_text: str) -> Dict[str, Any]:
@@ -1826,6 +2029,353 @@ def validate_output(
     }
 
 
+def validate_cross_format_consistency(
+    outputs: Dict[str, str],
+    canonical_model: CanonicalContentModel,
+    validation_results: Optional[Dict[str, Any]] = None
+) -> Dict[str, Any]:
+    """
+    Validates factual consistency across all generated output formats using the
+    Canonical Content Model as the authoritative source of truth.
+    Compares metrics, percentages, dates, standards, entities, and events across formats
+    to detect contradictions, divergent facts, or ungrounded fabrications.
+    """
+    contradictions: List[Dict[str, Any]] = []
+    source_ref = canonical_model.source_reference or "Source Reference"
+
+    # Pre-extract canonical baseline facts
+    canonical_pcts = set(re.findall(r"\b\d+(?:\.\d+)?%", canonical_model.source_text.lower()))
+    canonical_quarters = set(re.sub(r"\s+", "", q).lower() for q in re.findall(r"\bQ[1-4]\s*20\d\d\b", canonical_model.source_text, re.IGNORECASE))
+    canonical_years = set(re.findall(r"\b(?:19|20)\d\d\b", canonical_model.source_text))
+    canonical_std_lower = [re.sub(r"\s+", " ", s).strip().lower() for s in canonical_model.standards_and_certifications]
+
+    format_penalties: Dict[str, float] = {ot: 0.0 for ot in outputs}
+
+    for ot, text in outputs.items():
+        if not text:
+            continue
+        clean_text = re.sub(r"^\[MOCK GENERATION[^\]]*\]\s*Audience:[^\n]*\n*", "", text, flags=re.IGNORECASE)
+        clean_text = re.sub(r"---\s*\(Note: Placeholder mock output[^\)]*\)\s*$", "", clean_text, flags=re.IGNORECASE).strip()
+
+        # 1. Percentages and quantitative metrics
+        out_pcts = re.findall(r"\b\d+(?:\.\d+)?%", clean_text)
+        for p in out_pcts:
+            if canonical_pcts and p.lower() not in canonical_pcts:
+                expected = canonical_model.metrics[0] if canonical_model.metrics else list(canonical_pcts)[0]
+                contradictions.append({
+                    "element_type": "metric",
+                    "expected_value": expected,
+                    "observed_value": p,
+                    "affected_format": ot,
+                    "severity": "error",
+                    "source_reference": source_ref
+                })
+                format_penalties[ot] += 0.35
+
+        # 2. Dates / Timeline: Quarters
+        flagged_years = set()
+        out_quarters = re.findall(r"\bQ[1-4]\s*20\d\d\b", clean_text, re.IGNORECASE)
+        for q in out_quarters:
+            norm_q = re.sub(r"\s+", "", q).lower()
+            if canonical_quarters and norm_q not in canonical_quarters:
+                expected = canonical_model.dates[0] if canonical_model.dates else list(canonical_quarters)[0]
+                contradictions.append({
+                    "element_type": "date",
+                    "expected_value": expected,
+                    "observed_value": q,
+                    "affected_format": ot,
+                    "severity": "error",
+                    "source_reference": source_ref
+                })
+                format_penalties[ot] += 0.30
+                y_match = re.search(r"20\d\d", q)
+                if y_match:
+                    flagged_years.add(y_match.group(0))
+
+        # 3. Dates / Timeline: Standalone Years
+        out_years = re.findall(r"\b(?:19|20)\d\d\b", clean_text)
+        for y in out_years:
+            if y not in flagged_years and canonical_years and y not in canonical_years:
+                expected = list(canonical_years)[0]
+                contradictions.append({
+                    "element_type": "date",
+                    "expected_value": expected,
+                    "observed_value": y,
+                    "affected_format": ot,
+                    "severity": "error",
+                    "source_reference": source_ref
+                })
+                format_penalties[ot] += 0.25
+
+        # 4. Certifications & Standards
+        out_stds = re.findall(r"\b(?:SOC\s*[1-3](?:\s+Type\s+(?:I|II))?|ISO(?:/IEC)?\s*(?:\d{4,5})?)\b", clean_text, re.IGNORECASE)
+        for s in out_stds:
+            norm_s = re.sub(r"[\s/_\-]+", "", s).strip().lower()
+            soc_m = re.search(r"soc\s*([1-3])", s, re.IGNORECASE)
+            iso_m = re.search(r"iso.*?(\d{4,5})", s, re.IGNORECASE)
+
+            std_matched = False
+            if soc_m:
+                soc_level = soc_m.group(1)
+                std_matched = any(f"soc{soc_level}" in re.sub(r"[\s/_\-]+", "", cs).lower() for cs in canonical_std_lower)
+            elif iso_m:
+                iso_num = iso_m.group(1)
+                std_matched = any(iso_num in cs for cs in canonical_std_lower)
+            else:
+                std_matched = any(norm_s in re.sub(r"[\s/_\-]+", "", cs).lower() or re.sub(r"[\s/_\-]+", "", cs).lower() in norm_s for cs in canonical_std_lower)
+
+            if not std_matched and canonical_std_lower:
+                expected = canonical_model.standards_and_certifications[0]
+                contradictions.append({
+                    "element_type": "standard",
+                    "expected_value": expected,
+                    "observed_value": s,
+                    "affected_format": ot,
+                    "severity": "error",
+                    "source_reference": source_ref
+                })
+                format_penalties[ot] += 0.30
+
+        # 5. Unsupported Entities & Events
+        if validation_results and ot in validation_results:
+            grounding_data = validation_results[ot].get("factual_grounding", {})
+            unsupported_ent = grounding_data.get("unsupported_entities", [])
+            for ue in unsupported_ent:
+                expected = canonical_model.entities[0] if canonical_model.entities else "Canonical Entity"
+                contradictions.append({
+                    "element_type": "entity",
+                    "expected_value": expected,
+                    "observed_value": ue,
+                    "affected_format": ot,
+                    "severity": "error",
+                    "source_reference": source_ref
+                })
+                format_penalties[ot] += 0.35
+
+            unsupported_ev = grounding_data.get("unsupported_events", [])
+            for uev in unsupported_ev:
+                expected = canonical_model.events[0] if canonical_model.events else "Canonical Event"
+                contradictions.append({
+                    "element_type": "event",
+                    "expected_value": expected,
+                    "observed_value": uev,
+                    "affected_format": ot,
+                    "severity": "error",
+                    "source_reference": source_ref
+                })
+                format_penalties[ot] += 0.30
+
+    format_scores = {
+        ot: max(0.0, round(1.0 - format_penalties.get(ot, 0.0), 4))
+        for ot in outputs
+    }
+    overall_score = round(sum(format_scores.values()) / max(len(format_scores), 1), 4) if format_scores else 1.0
+
+    return {
+        "consistent": len(contradictions) == 0,
+        "contradictions": contradictions,
+        "contradiction_count": len(contradictions),
+        "format_consistency_scores": format_scores,
+        "overall_consistency_score": overall_score
+    }
+
+
+def build_claim_level_provenance(
+    output_type: str,
+    output_text: str,
+    canonical_model: CanonicalContentModel,
+    validation_result: Optional[Dict[str, Any]] = None,
+    contradictions: Optional[List[Dict[str, Any]]] = None
+) -> List[Dict[str, Any]]:
+    """
+    Constructs claim-level provenance records linking:
+    Source fact -> Canonical fact -> Generated claim -> Validation status.
+    """
+    if not output_text:
+        return []
+
+    claims = _split_into_claim_candidates(output_text)
+    source_ref = canonical_model.source_reference or "Source Reference"
+    unsupported_claims = set(validation_result.get("factual_grounding", {}).get("unsupported_claims", [])) if validation_result else set()
+
+    contradiction_vals = set()
+    if contradictions:
+        for c in contradictions:
+            if c.get("affected_format") == output_type:
+                contradiction_vals.add(str(c.get("observed_value", "")).lower())
+
+    records: List[Dict[str, Any]] = []
+    for c in claims:
+        c_lower = c.lower()
+        matched_facts = []
+        for m in canonical_model.metrics:
+            if m.lower() in c_lower:
+                matched_facts.append(m)
+        for d in canonical_model.dates:
+            if d.lower() in c_lower:
+                matched_facts.append(d)
+        for s in canonical_model.standards_and_certifications:
+            if s.lower() in c_lower:
+                matched_facts.append(s)
+        for e in canonical_model.entities:
+            if e.lower() in c_lower:
+                matched_facts.append(e)
+
+        if any(cv in c_lower for cv in contradiction_vals if cv):
+            status = "contradiction"
+        elif any(c == uc or uc in c for uc in unsupported_claims):
+            status = "unsupported"
+        else:
+            status = "verified"
+
+        canonical_fact_str = (
+            ", ".join(matched_facts)
+            if matched_facts
+            else (canonical_model.key_messages[0] if canonical_model.key_messages else "General source context")
+        )
+
+        records.append({
+            "claim": c,
+            "canonical_fact": canonical_fact_str,
+            "source_reference": source_ref,
+            "output_format": output_type,
+            "status": status
+        })
+
+    return records
+
+
+def calculate_quality_score(
+    validation_result: Dict[str, Any],
+    consistency_score: float = 1.0,
+    contradiction_count: int = 0
+) -> Dict[str, Any]:
+    """
+    Computes a deterministic, explainable quality and confidence score (0.0 to 1.0).
+    Uses principled architectural weights:
+    - Factual Grounding: 0.35 (claim-level truthfulness & fact preservation)
+    - Structural Validity: 0.25 (adherence to format-specific structural blueprints)
+    - Consistency: 0.25 (cross-format consensus and absence of contradictions)
+    - Configuration Compliance: 0.15 (audience, tone, language, and detail guidelines)
+    Total Weight = 1.00.
+    """
+    factual_grounding = validation_result.get("factual_grounding", {})
+
+    # 1. Grounding score (Weight 0.35)
+    claim_grounding = float(factual_grounding.get("claim_grounding_score", 1.0))
+    unverified_metrics = factual_grounding.get("unverified_metrics", [])
+    unsupported_events = factual_grounding.get("unsupported_events", [])
+    unsupported_entities = factual_grounding.get("unsupported_entities", [])
+
+    grounding = claim_grounding
+    if unverified_metrics:
+        grounding -= 0.35 * len(unverified_metrics)
+    if unsupported_events:
+        grounding -= 0.30 * len(unsupported_events)
+    if unsupported_entities:
+        grounding -= 0.25 * len(unsupported_entities)
+    if not factual_grounding.get("is_grounded", True):
+        grounding = min(grounding, 0.50)
+    grounding = max(0.0, min(1.0, round(grounding, 4)))
+
+    # 2. Structure score (Weight 0.25)
+    valid = validation_result.get("valid", True)
+    severity = validation_result.get("severity", "none")
+    issues = validation_result.get("issues", [])
+
+    if valid and severity == "none":
+        structure = 1.0
+    elif severity == "warning":
+        structure = max(0.70, round(1.0 - 0.10 * len(issues), 4))
+    else:
+        structure = max(0.0, round(0.50 - 0.15 * len(issues), 4))
+
+    # 3. Consistency score (Weight 0.25)
+    consistency = max(0.0, min(1.0, round(consistency_score, 4)))
+    if contradiction_count > 0:
+        consistency = max(0.0, round(consistency - 0.20 * contradiction_count, 4))
+
+    # 4. Configuration compliance score (Weight 0.15)
+    compliance = 1.0
+    if any("audience" in iss.lower() or "tone" in iss.lower() or "length" in iss.lower() for iss in issues):
+        compliance = 0.85
+
+    overall_score = round(
+        0.35 * grounding + 0.25 * structure + 0.25 * consistency + 0.15 * compliance,
+        4
+    )
+
+    return {
+        "overall_score": overall_score,
+        "grounding": grounding,
+        "structure": structure,
+        "consistency": consistency,
+        "compliance": compliance,
+        "weights": {
+            "grounding": 0.35,
+            "structure": 0.25,
+            "consistency": 0.25,
+            "compliance": 0.15
+        }
+    }
+
+
+def evaluate_quality_gate(
+    quality_scores: Dict[str, Dict[str, Any]],
+    consistency_report: Dict[str, Any],
+    threshold: float = 0.80
+) -> Dict[str, Any]:
+    """
+    Evaluates whether generated outputs clear the quality gate.
+    Passes if:
+    1. Overall quality score meets or exceeds threshold (default 0.80)
+    2. Every individual format passes without severe structural errors or contradictions.
+    """
+    per_format_gate = {}
+    failing_formats = []
+
+    for ot, score_data in quality_scores.items():
+        score = score_data.get("overall_score", 0.0)
+        format_contradictions = [c for c in consistency_report.get("contradictions", []) if c.get("affected_format") == ot]
+        has_severe_contradiction = any(c.get("severity") == "error" for c in format_contradictions)
+
+        passed = (score >= threshold) and not has_severe_contradiction
+
+        if not passed:
+            failing_formats.append(ot)
+            if has_severe_contradiction:
+                reasons = [
+                    f"Contradiction in {c.get('element_type')}: observed '{c.get('observed_value')}' vs expected '{c.get('expected_value')}'"
+                    for c in format_contradictions
+                ]
+                reason = "; ".join(reasons)
+            else:
+                reason = f"Quality score {score} is below threshold {threshold}"
+        else:
+            reason = "Quality gate passed"
+
+        per_format_gate[ot] = {
+            "passed": passed,
+            "score": score,
+            "reason": reason
+        }
+
+    overall_score = round(
+        sum(s.get("overall_score", 0.0) for s in quality_scores.values()) / max(len(quality_scores), 1),
+        4
+    ) if quality_scores else 1.0
+
+    gate_passed = len(failing_formats) == 0 and (overall_score >= threshold)
+
+    return {
+        "gate_passed": gate_passed,
+        "gate_threshold": threshold,
+        "overall_quality_score": overall_score,
+        "failing_formats": failing_formats,
+        "per_format_gate": per_format_gate
+    }
+
+
 def build_output_provenance(
     output_type: str,
     generation_action: str,  # "generated", "recovered", "refined"
@@ -1841,11 +2391,15 @@ def build_output_provenance(
     target_audience: Optional[str] = None,
     tone: Optional[str] = None,
     language: Optional[str] = None,
-    detail_level: Optional[str] = None
+    detail_level: Optional[str] = None,
+    claim_provenance: Optional[List[Dict[str, Any]]] = None,
+    quality_score: Optional[Dict[str, Any]] = None,
+    initial_validation: Optional[Dict[str, Any]] = None
 ) -> Dict[str, Any]:
     """
     Constructs a structured provenance and traceability record for an output artefact.
-    Preserves truthful tracking of generation calls, actions, and validation status.
+    Preserves truthful tracking of generation calls, actions, and validation status,
+    enriched with claim-level provenance, initial validation history, and explainable quality scores.
     """
     return {
         "output_type": output_type,
@@ -1857,6 +2411,7 @@ def build_output_provenance(
         "source_reference": source_reference,
         "validation": validation,
         "factual_grounding": validation.get("factual_grounding", {}),
+        "initial_validation": initial_validation,
         "recovery_attempted": recovery_attempted,
         "recovery_call_count": recovery_call_count,
         "refinement_applied": refinement_applied,
@@ -1864,7 +2419,9 @@ def build_output_provenance(
         "target_audience": target_audience,
         "tone": tone,
         "language": language,
-        "detail_level": detail_level
+        "detail_level": detail_level,
+        "claim_provenance": claim_provenance or [],
+        "quality_score": quality_score or {}
     }
 
 
@@ -1897,14 +2454,15 @@ def validate_and_recover_outputs(
     outputs: Dict[str, str],
     request: TransformRequest,
     model: Optional[genai.GenerativeModel],
-    multimodal_parts: list
+    multimodal_parts: list,
+    canonical_model: Optional[CanonicalContentModel] = None
 ) -> Tuple[Dict[str, str], Dict[str, Any]]:
     """
-    Validates all requested outputs across the 5 quality dimensions.
-    If an output fails structural validity or contains critical factual grounding violations,
+    Validates all requested outputs across structural, factual grounding, and cross-format consistency dimensions.
+    Calculates deterministic quality scores and evaluates the final Quality Gate.
+    If an output fails structural validity, contains critical grounding violations, or fails the Quality Gate,
     attempts a single feedback-aware targeted recovery for that specific format only.
-    Re-validates the recovered output (maximum 1 recovery attempt per format).
-    Returns (final_outputs, validation_report).
+    Re-validates recovered outputs and constructs claim-level provenance.
     """
     source = request.source_content.strip()
     audience = request.target_audience or "General Audience"
@@ -1914,9 +2472,19 @@ def validate_and_recover_outputs(
     language = request.language or "English"
     detail = request.detail_level or "Standard"
 
+    source_ref = (
+        request.document_name or
+        (f"Image: {request.image_name}" if request.image_name else None) or
+        (f"Video: {request.video_name}" if request.video_name else None) or
+        f"Direct Input ({len(source)} chars)"
+    )
+
+    if canonical_model is None:
+        canonical_model = build_canonical_content_model(source, source_ref)
+
     validation_results: Dict[str, Dict[str, Any]] = {}
 
-    # 1. Initial Validation of all requested outputs
+    # 1. Initial Validation of all requested outputs (Structural + Factual Grounding)
     for ot in request.output_types:
         val = validate_output(
             output_type=ot,
@@ -1931,18 +2499,54 @@ def validate_and_recover_outputs(
         )
         validation_results[ot] = val
 
-    # 2. Identify outputs requiring targeted recovery (structural errors or unsafe grounding failures)
-    failed_outputs = [ot for ot in request.output_types if should_trigger_recovery(validation_results[ot])]
+    # 2. Cross-Format Consistency Validation
+    consistency_report = validate_cross_format_consistency(
+        outputs=outputs,
+        canonical_model=canonical_model,
+        validation_results=validation_results
+    )
+
+    # 3. Quality & Confidence Scoring
+    quality_scores: Dict[str, Dict[str, Any]] = {}
+    for ot in request.output_types:
+        fmt_cons = consistency_report["format_consistency_scores"].get(ot, 1.0)
+        fmt_contras = [c for c in consistency_report.get("contradictions", []) if c.get("affected_format") == ot]
+        quality_scores[ot] = calculate_quality_score(
+            validation_result=validation_results[ot],
+            consistency_score=fmt_cons,
+            contradiction_count=len(fmt_contras)
+        )
+
+    # 4. Final Quality Gate Evaluation (Threshold 0.80)
+    quality_gate = evaluate_quality_gate(
+        quality_scores=quality_scores,
+        consistency_report=consistency_report,
+        threshold=0.80
+    )
+
+    # 5. Identify outputs requiring targeted recovery (structural errors, unsafe grounding, or quality gate failure)
+    initial_validation = {ot: dict(val_data) for ot, val_data in validation_results.items()}
+    failed_outputs = [
+        ot for ot in request.output_types
+        if should_trigger_recovery(validation_results[ot]) or (not quality_gate["per_format_gate"].get(ot, {}).get("passed", True))
+    ]
     recovered_formats: List[str] = []
 
-    # 3. Targeted Recovery (At most ONE attempt per failed output)
+    # 6. Targeted Recovery (At most ONE attempt per failed output)
     if failed_outputs and model is not None:
         for failed_ot in failed_outputs:
             try:
                 prev_text = outputs.get(failed_ot, "")
                 prev_val = validation_results.get(failed_ot, {})
-                prev_issues = prev_val.get("issues", [])
+                prev_issues = list(prev_val.get("issues", []))
                 prev_grounding = prev_val.get("factual_grounding", {})
+
+                # Feed contradiction details into recovery prompt
+                fmt_contras = [c for c in consistency_report.get("contradictions", []) if c.get("affected_format") == failed_ot]
+                for c in fmt_contras:
+                    prev_issues.append(
+                        f"CONTRADICTION DETECTED: Observed value '{c.get('observed_value')}' differs from canonical fact '{c.get('expected_value')}' ({c.get('element_type')}). You MUST correct this to '{c.get('expected_value')}'."
+                    )
 
                 recovered_text = targeted_recover_missing_output(
                     model=model,
@@ -1985,11 +2589,51 @@ def validate_and_recover_outputs(
                     detail=f"Targeted recovery failed: LLM did not generate acceptable output format '{failed_ot}' ({str(rec_err)})."
                 )
 
+        # Re-evaluate consistency and quality gate post-recovery
+        consistency_report = validate_cross_format_consistency(
+            outputs=outputs,
+            canonical_model=canonical_model,
+            validation_results=validation_results
+        )
+        for ot in request.output_types:
+            fmt_cons = consistency_report["format_consistency_scores"].get(ot, 1.0)
+            fmt_contras = [c for c in consistency_report.get("contradictions", []) if c.get("affected_format") == ot]
+            quality_scores[ot] = calculate_quality_score(
+                validation_result=validation_results[ot],
+                consistency_score=fmt_cons,
+                contradiction_count=len(fmt_contras)
+            )
+        quality_gate = evaluate_quality_gate(
+            quality_scores=quality_scores,
+            consistency_report=consistency_report,
+            threshold=0.80
+        )
+
+    # 7. Build Claim-Level Provenance for all outputs
+    claim_provenance_by_format = {
+        ot: build_claim_level_provenance(
+            output_type=ot,
+            output_text=text,
+            canonical_model=canonical_model,
+            validation_result=validation_results.get(ot),
+            contradictions=consistency_report.get("contradictions", [])
+        )
+        for ot, text in outputs.items()
+    }
+
     validation_report = {
         "all_valid": all(v["valid"] for v in validation_results.values()),
         "per_output": validation_results,
+        "initial_validation": initial_validation,
         "recovered_formats": recovered_formats,
-        "recovered_count": len(recovered_formats)
+        "recovered_count": len(recovered_formats),
+        "cross_format_consistency": consistency_report,
+        "quality_scores": {
+            "overall_score": quality_gate["overall_quality_score"],
+            "per_output": quality_scores
+        },
+        "quality_gate": quality_gate,
+        "claim_provenance": claim_provenance_by_format
     }
 
     return outputs, validation_report
@@ -2198,6 +2842,45 @@ def mock_transform_content(request: TransformRequest) -> TransformResponse:
         f"Direct Input ({len(source)} chars)"
     )
 
+    canonical_model = build_canonical_content_model(source, source_ref)
+
+    # 1. Cross-format consistency check
+    consistency_report = validate_cross_format_consistency(
+        outputs=outputs,
+        canonical_model=canonical_model,
+        validation_results=mock_validation
+    )
+
+    # 2. Quality & Confidence scoring
+    quality_scores = {}
+    for ot in request.output_types:
+        fmt_cons = consistency_report["format_consistency_scores"].get(ot, 1.0)
+        fmt_contras = [c for c in consistency_report.get("contradictions", []) if c.get("affected_format") == ot]
+        quality_scores[ot] = calculate_quality_score(
+            validation_result=mock_validation.get(ot, {}),
+            consistency_score=fmt_cons,
+            contradiction_count=len(fmt_contras)
+        )
+
+    # 3. Final Quality Gate evaluation
+    quality_gate = evaluate_quality_gate(
+        quality_scores=quality_scores,
+        consistency_report=consistency_report,
+        threshold=0.80
+    )
+
+    # 4. Claim-level provenance
+    claim_provenance_by_format = {
+        ot: build_claim_level_provenance(
+            output_type=ot,
+            output_text=text,
+            canonical_model=canonical_model,
+            validation_result=mock_validation.get(ot),
+            contradictions=consistency_report.get("contradictions", [])
+        )
+        for ot, text in outputs.items()
+    }
+
     provenance = {}
     for ot, text in outputs.items():
         provenance[ot] = build_output_provenance(
@@ -2213,8 +2896,15 @@ def mock_transform_content(request: TransformRequest) -> TransformResponse:
             target_audience=audience,
             tone=tone,
             language=language,
-            detail_level=detail
+            detail_level=detail,
+            claim_provenance=claim_provenance_by_format.get(ot, []),
+            quality_score=quality_scores.get(ot, {})
         )
+
+    overall_quality_data = {
+        "overall_score": quality_gate["overall_quality_score"],
+        "per_output": quality_scores
+    }
 
     return TransformResponse(
         status="success",
@@ -2234,11 +2924,25 @@ def mock_transform_content(request: TransformRequest) -> TransformResponse:
             "is_mock": True,
             "validation": {
                 "all_valid": all(v["valid"] for v in mock_validation.values()),
-                "per_output": mock_validation
+                "per_output": mock_validation,
+                "recovered_formats": [],
+                "recovered_count": 0,
+                "cross_format_consistency": consistency_report,
+                "quality_scores": overall_quality_data,
+                "quality_gate": quality_gate,
+                "claim_provenance": claim_provenance_by_format
             },
-            "provenance": provenance
+            "provenance": provenance,
+            "canonical_content": canonical_model.model_dump(),
+            "cross_format_consistency": consistency_report,
+            "quality_score": overall_quality_data,
+            "quality_gate": quality_gate
         },
-        provenance=provenance
+        provenance=provenance,
+        canonical_content=canonical_model,
+        cross_format_consistency=consistency_report,
+        quality_score=overall_quality_data,
+        quality_gate=quality_gate
     )
 
 
@@ -2325,6 +3029,13 @@ def transform_content(request: TransformRequest) -> TransformResponse:
 
     # 5. Call LLM using a single consolidated request for all selected output formats
     outputs = {}
+    source_ref = (
+        request.document_name or
+        (f"Image: {request.image_name}" if request.image_name else None) or
+        (f"Video: {request.video_name}" if request.video_name else None) or
+        f"Direct Input ({len(source)} chars)"
+    )
+    canonical_model = build_canonical_content_model(source, source_ref)
     try:
         genai.configure(api_key=api_key.strip())
         model_name = os.getenv("GEMINI_MODEL", "gemini-3.5-flash-lite")
@@ -2342,7 +3053,8 @@ def transform_content(request: TransformRequest) -> TransformResponse:
             content_style=style,
             document_name=request.document_name,
             image_name=request.image_name,
-            video_name=request.video_name
+            video_name=request.video_name,
+            canonical_model=canonical_model
         )
 
         content_payload = [prompt] + multimodal_parts if multimodal_parts else prompt
@@ -2391,7 +3103,8 @@ def transform_content(request: TransformRequest) -> TransformResponse:
             outputs=outputs,
             request=request,
             model=model,
-            multimodal_parts=multimodal_parts
+            multimodal_parts=multimodal_parts,
+            canonical_model=canonical_model
         )
 
     except HTTPException:
@@ -2404,19 +3117,13 @@ def transform_content(request: TransformRequest) -> TransformResponse:
             detail=f"LLM API failure: {str(e)}"
         )
 
-    # 6. Build structured provenance records for all generated outputs
-    source_ref = (
-        request.document_name or
-        (f"Image: {request.image_name}" if request.image_name else None) or
-        (f"Video: {request.video_name}" if request.video_name else None) or
-        f"Direct Input ({len(source)} chars)"
-    )
-
     recovered_set = set(validation_report.get("recovered_formats", []))
+    initial_val_map = validation_report.get("initial_validation", {})
     provenance = {}
     for ot, text in outputs.items():
         is_recovered = ot in recovered_set
         val_for_ot = validation_report.get("per_output", {}).get(ot, {})
+        init_val_for_ot = initial_val_map.get(ot) if is_recovered else None
         provenance[ot] = build_output_provenance(
             output_type=ot,
             generation_action="recovered" if is_recovered else "generated",
@@ -2430,10 +3137,13 @@ def transform_content(request: TransformRequest) -> TransformResponse:
             target_audience=audience,
             tone=tone,
             language=language,
-            detail_level=detail
+            detail_level=detail,
+            claim_provenance=validation_report.get("claim_provenance", {}).get(ot, []),
+            quality_score=validation_report.get("quality_scores", {}).get("per_output", {}).get(ot, {}),
+            initial_validation=init_val_for_ot
         )
 
-    # 7. Return response with metadata, validation report, and provenance
+    # 7. Return response with metadata, validation report, provenance, and canonical content
     return TransformResponse(
         status="success",
         outputs=outputs,
@@ -2451,9 +3161,17 @@ def transform_content(request: TransformRequest) -> TransformResponse:
             "model": model_name,
             "is_mock": False,
             "validation": validation_report,
-            "provenance": provenance
+            "provenance": provenance,
+            "canonical_content": canonical_model.model_dump(),
+            "cross_format_consistency": validation_report.get("cross_format_consistency"),
+            "quality_score": validation_report.get("quality_scores"),
+            "quality_gate": validation_report.get("quality_gate")
         },
-        provenance=provenance
+        provenance=provenance,
+        canonical_content=canonical_model,
+        cross_format_consistency=validation_report.get("cross_format_consistency"),
+        quality_score=validation_report.get("quality_scores"),
+        quality_gate=validation_report.get("quality_gate")
     )
 
 
@@ -2529,6 +3247,7 @@ def mock_refine_content(request: RefineRequest) -> RefineResponse:
     """
     Deterministic mock refinement fallback when USE_MOCK=true or API key is absent.
     """
+    source = request.source_content.strip()
     ot = request.output_type.strip()
     audience = request.target_audience or "General Audience"
     tone = request.tone or "Professional"
@@ -2564,6 +3283,39 @@ def mock_refine_content(request: RefineRequest) -> RefineResponse:
         f"Direct Input ({len(request.source_content)} chars)"
     )
 
+    canonical_model = build_canonical_content_model(source, source_ref)
+
+    # Consistency, quality scoring, and quality gate for refined output
+    consistency_report = validate_cross_format_consistency(
+        outputs={ot: refined_text},
+        canonical_model=canonical_model,
+        validation_results={ot: val_result}
+    )
+    fmt_cons = consistency_report["format_consistency_scores"].get(ot, 1.0)
+    fmt_contras = [c for c in consistency_report.get("contradictions", []) if c.get("affected_format") == ot]
+    ot_quality = calculate_quality_score(
+        validation_result=val_result,
+        consistency_score=fmt_cons,
+        contradiction_count=len(fmt_contras)
+    )
+    quality_scores = {ot: ot_quality}
+    quality_gate = evaluate_quality_gate(
+        quality_scores=quality_scores,
+        consistency_report=consistency_report,
+        threshold=0.80
+    )
+    claim_prov = build_claim_level_provenance(
+        output_type=ot,
+        output_text=refined_text,
+        canonical_model=canonical_model,
+        validation_result=val_result,
+        contradictions=consistency_report.get("contradictions", [])
+    )
+    overall_quality_data = {
+        "overall_score": quality_gate["overall_quality_score"],
+        "per_output": quality_scores
+    }
+
     prov = build_output_provenance(
         output_type=ot,
         generation_action="refined",
@@ -2579,8 +3331,16 @@ def mock_refine_content(request: RefineRequest) -> RefineResponse:
         target_audience=audience,
         tone=tone,
         language=language,
-        detail_level=detail
+        detail_level=detail,
+        claim_provenance=claim_prov,
+        quality_score=ot_quality
     )
+
+    val_metadata = dict(val_result)
+    val_metadata["cross_format_consistency"] = consistency_report
+    val_metadata["quality_scores"] = overall_quality_data
+    val_metadata["quality_gate"] = quality_gate
+    val_metadata["claim_provenance"] = claim_prov
 
     return RefineResponse(
         status="success",
@@ -2598,11 +3358,19 @@ def mock_refine_content(request: RefineRequest) -> RefineResponse:
             "document_name": request.document_name,
             "image_name": request.image_name,
             "video_name": request.video_name,
-            "validation": val_result,
+            "validation": val_metadata,
             "recovery_attempted": False,
-            "provenance": prov
+            "provenance": prov,
+            "canonical_content": canonical_model.model_dump(),
+            "cross_format_consistency": consistency_report,
+            "quality_score": overall_quality_data,
+            "quality_gate": quality_gate
         },
-        provenance=prov
+        provenance=prov,
+        canonical_content=canonical_model,
+        cross_format_consistency=consistency_report,
+        quality_score=overall_quality_data,
+        quality_gate=quality_gate
     )
 
 
@@ -2758,8 +3526,10 @@ def refine_output(request: RefineRequest) -> RefineResponse:
         )
 
         # 8. If validation severity is 'error', perform at most ONE targeted recovery
+        initial_val_result = None
         if val_result.get("severity") == "error":
             recovery_attempted = True
+            initial_val_result = dict(val_result)
             try:
                 rec_instruction = (
                     f"{request.refinement_instruction}. "
@@ -2842,6 +3612,39 @@ def refine_output(request: RefineRequest) -> RefineResponse:
         f"Direct Input ({len(source)} chars)"
     )
 
+    canonical_model = build_canonical_content_model(source, source_ref)
+
+    # Consistency, quality scoring, and quality gate for refined output
+    consistency_report = validate_cross_format_consistency(
+        outputs={ot: refined_text},
+        canonical_model=canonical_model,
+        validation_results={ot: val_result}
+    )
+    fmt_cons = consistency_report["format_consistency_scores"].get(ot, 1.0)
+    fmt_contras = [c for c in consistency_report.get("contradictions", []) if c.get("affected_format") == ot]
+    ot_quality = calculate_quality_score(
+        validation_result=val_result,
+        consistency_score=fmt_cons,
+        contradiction_count=len(fmt_contras)
+    )
+    quality_scores = {ot: ot_quality}
+    quality_gate = evaluate_quality_gate(
+        quality_scores=quality_scores,
+        consistency_report=consistency_report,
+        threshold=0.80
+    )
+    claim_prov = build_claim_level_provenance(
+        output_type=ot,
+        output_text=refined_text,
+        canonical_model=canonical_model,
+        validation_result=val_result,
+        contradictions=consistency_report.get("contradictions", [])
+    )
+    overall_quality_data = {
+        "overall_score": quality_gate["overall_quality_score"],
+        "per_output": quality_scores
+    }
+
     prov = build_output_provenance(
         output_type=ot,
         generation_action="recovered" if recovery_attempted else "refined",
@@ -2857,8 +3660,17 @@ def refine_output(request: RefineRequest) -> RefineResponse:
         target_audience=audience,
         tone=tone,
         language=language,
-        detail_level=detail
+        detail_level=detail,
+        claim_provenance=claim_prov,
+        quality_score=ot_quality,
+        initial_validation=initial_val_result
     )
+
+    val_metadata = dict(val_result)
+    val_metadata["cross_format_consistency"] = consistency_report
+    val_metadata["quality_scores"] = overall_quality_data
+    val_metadata["quality_gate"] = quality_gate
+    val_metadata["claim_provenance"] = claim_prov
 
     # 10. Return structured RefineResponse
     return RefineResponse(
@@ -2877,9 +3689,17 @@ def refine_output(request: RefineRequest) -> RefineResponse:
             "document_name": request.document_name,
             "image_name": request.image_name,
             "video_name": request.video_name,
-            "validation": val_result,
+            "validation": val_metadata,
             "recovery_attempted": recovery_attempted,
-            "provenance": prov
+            "provenance": prov,
+            "canonical_content": canonical_model.model_dump(),
+            "cross_format_consistency": consistency_report,
+            "quality_score": overall_quality_data,
+            "quality_gate": quality_gate
         },
-        provenance=prov
+        provenance=prov,
+        canonical_content=canonical_model,
+        cross_format_consistency=consistency_report,
+        quality_score=overall_quality_data,
+        quality_gate=quality_gate
     )

@@ -28,6 +28,14 @@ const LANGUAGES = ['English', 'Hindi', 'Spanish', 'French', 'German'];
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://127.0.0.1:8000';
 
+// Configured Upload Limits (synchronized with backend: 35MB document/body, 10MB image, 25MB video)
+const MAX_DOC_SIZE_MB = 35;
+const MAX_DOC_SIZE_BYTES = MAX_DOC_SIZE_MB * 1024 * 1024;
+const MAX_IMAGE_SIZE_MB = 10;
+const MAX_IMAGE_SIZE_BYTES = MAX_IMAGE_SIZE_MB * 1024 * 1024;
+const MAX_VIDEO_SIZE_MB = 25;
+const MAX_VIDEO_SIZE_BYTES = MAX_VIDEO_SIZE_MB * 1024 * 1024;
+
 const DEMO_PRESETS = [
   {
     id: 'cybersecurity',
@@ -79,38 +87,95 @@ function parsePresentationSlides(text) {
   return matches.map((m, idx) => {
     const slideNum = m[1] || `${idx + 1}`;
     const rawBody = (m[2] || '').trim();
-    const lines = rawBody.split('\n').map(l => l.trim()).filter(Boolean);
+    const rawLines = rawBody.split('\n');
 
-    let title = `Slide ${slideNum}`;
-    const bullets = [];
-    let speakerNotes = '';
-
-    if (lines.length > 0) {
-      let startIdx = 0;
-      const firstLine = lines[0];
-      if (/^slide title:\s*/i.test(firstLine)) {
-        title = firstLine.replace(/^slide title:\s*/i, '').replace(/[*_]/g, '').trim();
-        startIdx = 1;
-      } else if (!firstLine.startsWith('-') && !firstLine.startsWith('•') && !firstLine.startsWith('*') && !/^\d+\./.test(firstLine)) {
-        title = firstLine.replace(/[*_]/g, '').trim();
-        startIdx = 1;
+    let headerLabel = '';
+    let bodyLines = [];
+    if (rawLines.length > 0) {
+      const firstLineTrimmed = rawLines[0].trim();
+      if (firstLineTrimmed && !/^[-•*]/.test(firstLineTrimmed) && !/^(?:slide\s+title|bullet\s+points?|(?:speaker\s+)?notes?):/i.test(firstLineTrimmed)) {
+        headerLabel = firstLineTrimmed.replace(/[*_#]/g, '').trim();
+        bodyLines = rawLines.slice(1);
+      } else {
+        bodyLines = rawLines;
       }
+    }
 
-      for (let i = startIdx; i < lines.length; i++) {
-        const line = lines[i];
-        if (/^(?:speaker )?notes?:\s*/i.test(line)) {
-          speakerNotes = lines.slice(i).join(' ').replace(/^(?:speaker )?notes?:\s*/i, '').replace(/[*_]/g, '').trim();
+    let explicitTitle = '';
+    const slideTitleRegex = /^[-•*]?\s*(?:\*\*)?(?:slide\s+title|title)\s*(?:\*\*)?:\s*(.+)$/i;
+    for (const rawLine of bodyLines) {
+      const trimmed = rawLine.trim();
+      const titleMatch = trimmed.match(slideTitleRegex);
+      if (titleMatch && titleMatch[1]) {
+        const candidate = titleMatch[1].replace(/[*_]/g, '').trim();
+        if (candidate) {
+          explicitTitle = candidate;
           break;
-        } else if (line.startsWith('-') || line.startsWith('•') || line.startsWith('*')) {
-          bullets.push(line.replace(/^[-•*]\s*/, '').replace(/[*_]/g, '').trim());
-        } else if (/^\d+\./.test(line)) {
-          bullets.push(line.replace(/^\d+\.\s*/, '').replace(/[*_]/g, '').trim());
-        } else if (line) {
-          bullets.push(line.replace(/[*_]/g, '').trim());
         }
       }
     }
 
+    let title = `Slide ${slideNum}`;
+    if (explicitTitle) {
+      title = explicitTitle;
+    } else if (headerLabel) {
+      const isGenericPlaceholder = /^(?:title|slide(?:\s+\d+)?|slide\s+title)$/i.test(headerLabel);
+      if (!isGenericPlaceholder) {
+        title = headerLabel;
+      }
+    }
+
+    const bullets = [];
+    const speakerNotesLines = [];
+    let inSpeakerNotes = false;
+
+    const bulletSectionMarkerRegex = /^[-•*]?\s*(?:\*\*)?(?:bullet\s+points?|key\s+points?|bullets?)\s*(?:\*\*)?:?\s*(.*)$/i;
+    const speakerNotesMarkerRegex = /^[-•*]?\s*(?:\*\*)?(?:speaker\s+)?notes?\s*(?:\*\*)?:\s*(.*)$/i;
+
+    for (const rawLine of bodyLines) {
+      const line = rawLine.trim();
+      if (!line) continue;
+
+      if (slideTitleRegex.test(line)) {
+        continue;
+      }
+
+      const notesMatch = line.match(speakerNotesMarkerRegex);
+      if (notesMatch) {
+        inSpeakerNotes = true;
+        const noteContent = notesMatch[1].replace(/[*_]/g, '').trim();
+        if (noteContent) {
+          speakerNotesLines.push(noteContent);
+        }
+        continue;
+      }
+
+      if (inSpeakerNotes) {
+        const cleanNote = line.replace(/^[-•*]\s*/, '').replace(/[*_]/g, '').trim();
+        if (cleanNote) {
+          speakerNotesLines.push(cleanNote);
+        }
+        continue;
+      }
+
+      const bulletSectionMatch = line.match(bulletSectionMarkerRegex);
+      if (bulletSectionMatch) {
+        const sameLineContent = bulletSectionMatch[1].replace(/^[-•*]\s*/, '').replace(/[*_]/g, '').trim();
+        if (sameLineContent) {
+          bullets.push(sameLineContent);
+        }
+        continue;
+      }
+
+      let cleanBullet = line.replace(/^[-•*]\s*/, '').replace(/^\d+\.\s*/, '').replace(/[*_]/g, '').trim();
+      cleanBullet = cleanBullet.replace(/^(?:slide\s+title|bullet\s+points?|(?:speaker\s+)?notes?):\s*/i, '').trim();
+
+      if (cleanBullet) {
+        bullets.push(cleanBullet);
+      }
+    }
+
+    const speakerNotes = speakerNotesLines.join(' ').trim();
     return { slideNum, title, bullets, speakerNotes };
   });
 }
@@ -154,6 +219,110 @@ function parseInfographicData(text) {
   return { title, statCards, pillars };
 }
 
+function parseVideoStoryboard(text) {
+  if (!text) return null;
+
+  // Split into scenes using regex matching "Scene <number>"
+  // Handles: "Scene 1", "Scene 01", "### Scene 1", "**Scene 1:**", "Scene 1 (0:00 - 0:10)"
+  const sceneRegex = /(?:^|\n)(?:###?\s*|\*\*)?Scene\s*(\d+)[:\s\-–]*(.*?)(?=(?:\n(?:###?\s*|\*\*)?Scene\s*\d+|\n(?:###?\s*|\*\*)?(?:PRODUCTION RECOMMENDATIONS|RECOMMENDATIONS|FULL VOICEOVER SCRIPT)|\n---|$))/gis;
+
+  const matches = [...text.matchAll(sceneRegex)];
+  if (matches.length < 2) return null;
+
+  const scenes = matches.map((m, idx) => {
+    const sceneNum = m[1] || `${idx + 1}`;
+    const rawBody = (m[2] || '').trim();
+    const rawLines = rawBody.split('\n').map(l => l.trim()).filter(Boolean);
+
+    let titleOrTime = '';
+    let visual = '';
+    let narration = '';
+    let onScreenText = '';
+    const otherNotes = [];
+
+    let startLine = 0;
+    if (rawLines.length > 0) {
+      const firstLine = rawLines[0];
+      const isFieldMarker = /^(?:[-•*]?\s*(?:\*\*)?(?:visual|narration|voiceover|subtitles|on-screen\s+text|audio|chyrons?))/i.test(firstLine);
+      if (!isFieldMarker && (/^[\(\[]?[0-9: \-–]+[\)\]]?/.test(firstLine) || (!firstLine.includes(':') && firstLine.length < 60))) {
+        titleOrTime = firstLine.replace(/^[-–—:\s]+/, '').replace(/[*_#]/g, '').trim();
+        startLine = 1;
+      }
+    }
+
+    for (let i = startLine; i < rawLines.length; i++) {
+      const line = rawLines[i];
+
+      // Visual / Action
+      const visualMatch = line.match(/^[-•*]?\s*(?:\*\*)?(?:visual(?:\s+description)?(?:\s*\/\s*action)?|visuals?|visual\s+cues?|action)\s*(?:\*\*)?[:\-–]\s*(.*)$/i);
+      if (visualMatch) {
+        visual = visualMatch[1].replace(/[*_]/g, '').trim();
+        continue;
+      }
+
+      // On-Screen Text / Subtitles / Chyron
+      const textMatch = line.match(/^[-•*]?\s*(?:\*\*)?(?:(?:subtitles?\s*\/\s*)?on-screen\s+text|subtitles?|chyron|screen\s+text|text\s+overlay)\s*(?:\*\*)?[:\-–]\s*(.*)$/i);
+      if (textMatch) {
+        onScreenText = textMatch[1].replace(/[*_]/g, '').trim();
+        continue;
+      }
+
+      // Narration / Voiceover / Audio
+      const narrationMatch = line.match(/^[-•*]?\s*(?:\*\*)?(?:narration(?:\s*\/\s*voiceover)?|voiceover(?:\s*\/\s*narration)?|narration|voiceover|audio|dialogue)\s*(?:\*\*)?[:\-–]\s*(.*)$/i);
+      if (narrationMatch) {
+        narration = narrationMatch[1].replace(/[*_]/g, '').trim();
+        continue;
+      }
+
+      // First line without field label can act as visual description
+      if (!visual && i === startLine && !line.includes(':')) {
+        visual = line.replace(/[*_]/g, '').trim();
+        continue;
+      }
+
+      const cleanLine = line.replace(/^[-•*]\s*/, '').replace(/[*_]/g, '').trim();
+      if (cleanLine) {
+        otherNotes.push(cleanLine);
+      }
+    }
+
+    if (!visual && otherNotes.length > 0 && !narration && !onScreenText) {
+      visual = otherNotes.shift();
+    }
+
+    return {
+      sceneNum: sceneNum.padStart(2, '0'),
+      titleOrTime,
+      visual,
+      narration,
+      onScreenText,
+      otherNotes
+    };
+  });
+
+  // Extract optional overall video brief / objective
+  let brief = null;
+  const briefMatch = text.match(/(?:VIDEO PRODUCTION BRIEF|Video Objective)[:\s\-–]*([\s\S]*?)(?=(?:FULL VOICEOVER SCRIPT|STORYBOARD|Scene\s+\d+|$))/i);
+  if (briefMatch) {
+    const rawBrief = briefMatch[1].trim();
+    if (rawBrief && rawBrief.length < 300) {
+      brief = rawBrief.replace(/[*_#]/g, '').trim();
+    }
+  }
+
+  // Extract optional recommendations
+  let recommendations = null;
+  const recMatch = text.match(/(?:PRODUCTION RECOMMENDATIONS|RECOMMENDATIONS)[:\s\-–]*([\s\S]*?)(?=(?:---\s*\(Note:|$))/i);
+  if (recMatch) {
+    const rawRec = recMatch[1].trim().split('\n').map(l => l.replace(/^[-•*]\s*/, '').replace(/[*_]/g, '').trim()).filter(Boolean);
+    if (rawRec.length > 0) {
+      recommendations = rawRec.slice(0, 4);
+    }
+  }
+
+  return { scenes, brief, recommendations };
+}
+
 function App() {
   const [sourceContent, setSourceContent] = useState('');
   const [outputTypes, setOutputTypes] = useState(['Executive Summary']);
@@ -182,6 +351,7 @@ function App() {
 
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
+  const [uploadError, setUploadError] = useState(null);
   const [result, setResult] = useState(null);
   const [copiedType, setCopiedType] = useState(null);
 
@@ -191,9 +361,17 @@ function App() {
   const [refineInstructions, setRefineInstructions] = useState({});
   const [refineErrors, setRefineErrors] = useState({});
 
-  // SIH Differentiation: View Modes (visual vs raw) and Slide Deck state
+  // SIH Differentiation: View Modes (visual vs raw), Slide Deck state, and On-Demand Audit Trays
   const [viewModes, setViewModes] = useState({});
   const [slideIndices, setSlideIndices] = useState({});
+  const [openAuditCards, setOpenAuditCards] = useState({});
+
+  const toggleAuditCard = (type) => {
+    setOpenAuditCards((prev) => ({
+      ...prev,
+      [type]: !prev[type]
+    }));
+  };
 
   const toggleViewMode = (type) => {
     setViewModes((prev) => ({
@@ -432,12 +610,24 @@ function App() {
 
     const extension = file.name.split('.').pop().toLowerCase();
     if (!['txt', 'md', 'pdf', 'docx'].includes(extension)) {
-      setError(`Unsupported document format (.${extension}). Supported formats are: .txt, .pdf, .docx.`);
+      const msg = `Unsupported document format (.${extension}). Supported formats are: .txt, .pdf, .docx.`;
+      setError(msg);
+      setUploadError(msg);
+      if (fileInputRef.current) fileInputRef.current.value = '';
+      return;
+    }
+
+    if (file.size > MAX_DOC_SIZE_BYTES) {
+      const msg = `File is too large. Maximum allowed size is ${MAX_DOC_SIZE_MB} MB.`;
+      setError(msg);
+      setUploadError(msg);
+      if (fileInputRef.current) fileInputRef.current.value = '';
       return;
     }
 
     setExtracting(true);
     setError(null);
+    setUploadError(null);
 
     const formData = new FormData();
     formData.append('file', file);
@@ -458,7 +648,9 @@ function App() {
       setDocumentName(file.name);
     } catch (err) {
       console.error('Extraction error:', err);
-      setError(err.message || 'Failed to extract text from the uploaded document.');
+      const msg = err.message || 'Failed to extract text from the uploaded document.';
+      setError(msg);
+      setUploadError(msg);
     } finally {
       setExtracting(false);
     }
@@ -466,6 +658,7 @@ function App() {
 
   const handleClearDocument = () => {
     setDocumentName(null);
+    setUploadError(null);
     if (fileInputRef.current) {
       fileInputRef.current.value = '';
     }
@@ -478,11 +671,23 @@ function App() {
 
     const extension = file.name.split('.').pop().toLowerCase();
     if (!['png', 'jpg', 'jpeg', 'webp', 'gif'].includes(extension)) {
-      setError(`Unsupported image format (.${extension}). Supported formats are: .png, .jpg, .jpeg, .webp, .gif.`);
+      const msg = `Unsupported image format (.${extension}). Supported formats are: .png, .jpg, .jpeg, .webp, .gif.`;
+      setError(msg);
+      setUploadError(msg);
+      if (imageInputRef.current) imageInputRef.current.value = '';
+      return;
+    }
+
+    if (file.size > MAX_IMAGE_SIZE_BYTES) {
+      const msg = `File is too large. Maximum allowed size is ${MAX_IMAGE_SIZE_MB} MB.`;
+      setError(msg);
+      setUploadError(msg);
+      if (imageInputRef.current) imageInputRef.current.value = '';
       return;
     }
 
     setError(null);
+    setUploadError(null);
     const reader = new FileReader();
     reader.onload = () => {
       setImagePreview(reader.result);
@@ -494,7 +699,9 @@ function App() {
       }
     };
     reader.onerror = () => {
-      setError('Failed to read the selected image file.');
+      const msg = 'Failed to read the selected image file.';
+      setError(msg);
+      setUploadError(msg);
     };
     reader.readAsDataURL(file);
   };
@@ -502,6 +709,7 @@ function App() {
   const handleClearImage = () => {
     setImagePreview(null);
     setImageName(null);
+    setUploadError(null);
     if (imageInputRef.current) {
       imageInputRef.current.value = '';
     }
@@ -519,17 +727,24 @@ function App() {
 
     const extension = file.name.split('.').pop().toLowerCase();
     if (!['mp4', 'webm', 'mov'].includes(extension)) {
-      setError(`Unsupported video format (.${extension}). Supported formats are: .mp4, .webm, .mov.`);
+      const msg = `Unsupported video format (.${extension}). Supported formats are: .mp4, .webm, .mov.`;
+      setError(msg);
+      setUploadError(msg);
+      if (videoInputRef.current) videoInputRef.current.value = '';
       return;
     }
 
-    // 25MB limit for MVP base64 handling
-    if (file.size > 25 * 1024 * 1024) {
-      setError(`Video file is too large (${(file.size / (1024 * 1024)).toFixed(1)}MB). Please upload a video under 25MB for the MVP.`);
+    // Configured video limit (25MB)
+    if (file.size > MAX_VIDEO_SIZE_BYTES) {
+      const msg = `Video is too large. Maximum allowed size is ${MAX_VIDEO_SIZE_MB} MB.`;
+      setError(msg);
+      setUploadError(msg);
+      if (videoInputRef.current) videoInputRef.current.value = '';
       return;
     }
 
     setError(null);
+    setUploadError(null);
     const sizeStr = file.size > 1024 * 1024
       ? `${(file.size / (1024 * 1024)).toFixed(1)} MB`
       : `${Math.round(file.size / 1024)} KB`;
@@ -546,7 +761,9 @@ function App() {
       }
     };
     reader.onerror = () => {
-      setError('Failed to read the selected video file.');
+      const msg = 'Failed to read the selected video file.';
+      setError(msg);
+      setUploadError(msg);
     };
     reader.readAsDataURL(file);
   };
@@ -555,6 +772,7 @@ function App() {
     setVideoPreview(null);
     setVideoName(null);
     setVideoSize(null);
+    setUploadError(null);
     if (videoInputRef.current) {
       videoInputRef.current.value = '';
     }
@@ -580,6 +798,7 @@ function App() {
 
     setLoading(true);
     setError(null);
+    setUploadError(null);
     setActiveRefineType(null);
     setRefiningType(null);
     setRefineErrors({});
@@ -693,17 +912,72 @@ function App() {
       <header className="app-header">
         <div className="badge">
           <span className="badge-dot"></span>
-          AI Content Transformer · SIH MVP
+          AI Content Transformer
         </div>
         <h1>Transform Source Into Impact</h1>
-        <p>Convert raw information into structured Executive Summaries, Advisories, Social Posts, Infographics, Presentations, and Video Packages using Gemini.</p>
+        <p>Convert raw information into structured, verified Executive Summaries, Advisories, Social Posts, Infographics, Presentations, and Video Packages.</p>
       </header>
+
+      {/* Visual Workflow Pipeline Hierarchy: SOURCE -> CONFIGURE -> GENERATE -> VALIDATE -> RESULTS */}
+      <div className="workflow-ribbon" role="region" aria-label="Transformation Workflow Pipeline">
+        <div className={`workflow-step ${sourceContent.trim() || imageName || videoName ? 'completed' : 'active'}`}>
+          <div className="workflow-step-num">01</div>
+          <div className="workflow-step-content">
+            <span className="workflow-step-name">SOURCE</span>
+            <span className="workflow-step-sub">Text · Doc · Image · Video</span>
+          </div>
+        </div>
+        <div className="workflow-step-arrow" aria-hidden="true">→</div>
+
+        <div className={`workflow-step ${outputTypes.length > 0 ? (hasOutputs ? 'completed' : 'active') : ''}`}>
+          <div className="workflow-step-num">02</div>
+          <div className="workflow-step-content">
+            <span className="workflow-step-name">CONFIGURE</span>
+            <span className="workflow-step-sub">{outputTypes.length} Formats · Audience</span>
+          </div>
+        </div>
+        <div className="workflow-step-arrow" aria-hidden="true">→</div>
+
+        <div className={`workflow-step ${loading ? 'active-pulse' : hasOutputs ? 'completed' : ''}`}>
+          <div className="workflow-step-num">03</div>
+          <div className="workflow-step-content">
+            <span className="workflow-step-name">GENERATE</span>
+            <span className="workflow-step-sub">AI Transformation</span>
+          </div>
+        </div>
+        <div className="workflow-step-arrow" aria-hidden="true">→</div>
+
+        <div className={`workflow-step ${hasOutputs ? 'completed' : loading ? 'active-pulse' : ''}`}>
+          <div className="workflow-step-num">04</div>
+          <div className="workflow-step-content">
+            <span className="workflow-step-name">VALIDATE</span>
+            <span className="workflow-step-sub">Factual Grounding & Healing</span>
+          </div>
+        </div>
+        <div className="workflow-step-arrow" aria-hidden="true">→</div>
+
+        <div className={`workflow-step ${hasOutputs ? 'completed-highlight' : ''}`}>
+          <div className="workflow-step-num">05</div>
+          <div className="workflow-step-content">
+            <span className="workflow-step-name">RESULTS</span>
+            <span className="workflow-step-sub">Verified Artefacts & Audit</span>
+          </div>
+        </div>
+      </div>
 
       {/* Main Grid */}
       <main className="main-layout">
         {/* Left Column: Form Controls */}
         <section className="card">
-          <h2 className="card-title">1. Source & Configuration</h2>
+          <div className="card-header-bar">
+            <h2 className="card-title" style={{ margin: 0 }}>1. Source & Configuration</h2>
+            <span className="card-step-badge">Pipeline Step 1 & 2</span>
+          </div>
+
+          <div className="section-step-indicator">
+            <span className="step-tag">STEP 01</span>
+            <span className="step-tag-label">Source Ingestion</span>
+          </div>
 
           {/* 1-Click Enterprise Demo Presets */}
           <div className="demo-presets-container">
@@ -793,6 +1067,17 @@ function App() {
                 </div>
               </div>
 
+              <div className="upload-limits-hint">
+                Max file size: Doc {MAX_DOC_SIZE_MB}MB · Image {MAX_IMAGE_SIZE_MB}MB · Video {MAX_VIDEO_SIZE_MB}MB · Supported: PDF, DOCX, TXT, images, video
+              </div>
+
+              {uploadError && (
+                <div className="upload-error-inline" role="alert">
+                  <span className="error-icon">⚠️</span>
+                  <span>{uploadError}</span>
+                </div>
+              )}
+
               {documentName && (
                 <div className="doc-loaded-badge">
                   <span>📎 Document loaded: <strong>{documentName}</strong></span>
@@ -862,6 +1147,12 @@ function App() {
                 disabled={loading || extracting}
                 required={!imagePreview && !videoPreview}
               />
+            </div>
+
+            {/* STEP 02: Format Selection & Audience Tuning */}
+            <div className="section-step-indicator" style={{ marginTop: '1.25rem' }}>
+              <span className="step-tag">STEP 02</span>
+              <span className="step-tag-label">Format Selection & Audience Tuning</span>
             </div>
 
             {/* Multi-Select Output Types Selector */}
@@ -1010,6 +1301,12 @@ function App() {
               </div>
             </div>
 
+            {/* STEP 03 & 04: Transformation & Grounding Verification */}
+            <div className="section-step-indicator" style={{ marginTop: '1.25rem' }}>
+              <span className="step-tag">STEP 03 & 04</span>
+              <span className="step-tag-label">Transformation & Grounding Verification</span>
+            </div>
+
             {/* Submit Button */}
             <button
               type="submit"
@@ -1027,15 +1324,21 @@ function App() {
                 </>
               )}
             </button>
+            <div className="btn-primary-caption">
+              Consolidated Gemini generation with automated factual grounding verification & self-healing recovery.
+            </div>
           </form>
         </section>
 
         {/* Right Column: Results Card */}
         <section className="card">
           <div className="result-header">
-            <h2 className="card-title" style={{ margin: 0 }}>
-              2. Generated Artefacts
-            </h2>
+            <div className="card-header-bar" style={{ gap: '0.65rem' }}>
+              <h2 className="card-title" style={{ margin: 0 }}>
+                2. Generated Artefacts
+              </h2>
+              <span className="card-step-badge">Pipeline Step 4 & 5</span>
+            </div>
 
             {hasOutputs && (
               <div className="export-actions-group">
@@ -1078,6 +1381,26 @@ function App() {
             </div>
           )}
 
+          {/* Trust Gate Summary Banner */}
+          {hasOutputs && (
+            <div className="trust-gate-summary-bar">
+              <div className="trust-gate-info">
+                <span className="trust-gate-shield">🛡️</span>
+                <div>
+                  <div className="trust-gate-heading">Factual Grounding & Integrity Verification Engine</div>
+                  <div className="trust-gate-desc">
+                    {Object.values(result.provenance || result.metadata?.provenance || {}).some(p => p.generation_action === 'recovered' || p.recovery_call_count > 0)
+                      ? 'Automated recovery active: Inconsistencies detected and healed through targeted self-healing.'
+                      : 'Direct verified pass: All generated statements strictly checked against source material.'}
+                  </div>
+                </div>
+              </div>
+              <div className="trust-gate-stats">
+                <span className="trust-pill-count">{Object.keys(result.outputs).length} Artefacts Verified</span>
+              </div>
+            </div>
+          )}
+
           {/* Multiple Outputs Display */}
           {hasOutputs ? (
             <div>
@@ -1087,6 +1410,14 @@ function App() {
                   const isRefiningThis = refiningType === type;
                   const isRefineOpen = activeRefineType === type;
 
+                  // Resolve final post-recovery validation state
+                  const finalVal = outputProv?.validation || result.metadata?.validation?.per_output?.[type] || {};
+                  const finalGrounding = finalVal?.factual_grounding || outputProv?.factual_grounding || {};
+                  const isGrounded = finalGrounding?.is_grounded === true;
+                  const isRecovered = outputProv?.generation_action === 'recovered' || (Boolean(outputProv?.recovery_attempted) && (outputProv?.recovery_call_count > 0 || outputProv?.generation_action === 'recovered'));
+                  const isValid = (finalVal?.valid ?? true) && isGrounded && finalVal?.severity !== 'error';
+                  const hasWarning = finalVal?.severity === 'warning';
+
                   return (
                     <div key={type} className={`output-card ${isRefiningThis ? 'card-refining' : ''}`}>
                       <div className="output-card-header">
@@ -1095,54 +1426,78 @@ function App() {
                             <span className="output-type-icon">{getTypeIcon(type)}</span>
                             <span>{type}</span>
                           </div>
-                          <div className="output-badges-group">
-                            {outputProv?.factual_grounding?.is_grounded && outputProv?.factual_grounding?.verified_count > 0 && (
-                              <span
-                                className="badge-provenance badge-grounded"
-                                title={outputProv.factual_grounding.summary || 'Factual grounding verified'}
-                              >
-                                🛡️ {outputProv.factual_grounding.verified_count}/{outputProv.factual_grounding.total_source_facts || outputProv.factual_grounding.verified_count} Grounded
-                              </span>
-                            )}
-                            {outputProv?.factual_grounding && !outputProv.factual_grounding.is_grounded && (
-                              <span
-                                className="badge-provenance badge-ungrounded"
-                                title={outputProv.factual_grounding.summary || 'Ungrounded content detected'}
-                              >
-                                🚫 Ungrounded
-                              </span>
-                            )}
-                            {!outputProv?.factual_grounding?.is_grounded && outputProv?.factual_grounding?.unverified_metrics?.length > 0 && (
-                              <span
-                                className="badge-provenance badge-unverified"
-                                title={`Unverified metrics: ${outputProv.factual_grounding.unverified_metrics.join(', ')}`}
-                              >
-                                ⚠️ {outputProv.factual_grounding.unverified_metrics.length} Unverified Metric ({outputProv.factual_grounding.unverified_metrics.join(', ')})
-                              </span>
-                            )}
-                            {!outputProv?.factual_grounding?.is_grounded && outputProv?.factual_grounding?.unsupported_events?.length > 0 && (
-                              <span
-                                className="badge-provenance badge-unverified"
-                                title={`Unsupported events: ${outputProv.factual_grounding.unsupported_events.join(', ')}`}
-                              >
-                                ⚠️ Unsupported Event: {outputProv.factual_grounding.unsupported_events.join(', ')}
-                              </span>
-                            )}
-                            {!outputProv?.factual_grounding?.is_grounded && outputProv?.factual_grounding?.unsupported_entities?.length > 0 && (
-                              <span
-                                className="badge-provenance badge-unverified"
-                                title={`Unsupported entities: ${outputProv.factual_grounding.unsupported_entities.join(', ')}`}
-                              >
-                                ⚠️ Unsupported Entity: {outputProv.factual_grounding.unsupported_entities.join(', ')}
-                              </span>
-                            )}
-                            {(outputProv?.generation_action === 'recovered' || outputProv?.recovery_attempted) && (
-                              <span
-                                className="badge-provenance badge-recovered"
-                                title="Recovered via targeted recovery"
-                              >
-                                🔄 Self-Healed
-                              </span>
+                          <div className="output-badges-group" role="status" aria-label="Trust & Validation Status">
+                            {isGrounded ? (
+                              <>
+                                <span
+                                  className="badge-provenance badge-grounded"
+                                  title={finalGrounding.summary || 'Factual grounding verified against source'}
+                                >
+                                  🛡 Grounded
+                                  {(finalGrounding?.verified_count > 0 || finalGrounding?.supported_claims_count > 0) && (
+                                    <span className="badge-subcount">
+                                      {finalGrounding.verified_count || finalGrounding.supported_claims_count}/{finalGrounding.total_source_facts || finalGrounding.total_claims || finalGrounding.verified_count || finalGrounding.supported_claims_count}
+                                    </span>
+                                  )}
+                                </span>
+                                {isValid && (
+                                  <span
+                                    className="badge-provenance badge-valid"
+                                    title="Structural quality and schema validation passed"
+                                  >
+                                    ✓ Validated
+                                  </span>
+                                )}
+                                {isRecovered && (
+                                  <span
+                                    className="badge-provenance badge-recovered"
+                                    title="Recovered via targeted self-healing"
+                                  >
+                                    🔄 Self-Healed
+                                  </span>
+                                )}
+                                {hasWarning && !isValid && (
+                                  <span
+                                    className="badge-provenance badge-warning"
+                                    title={`Notice: ${finalVal.issues?.join(', ') || 'Validation warning'}`}
+                                  >
+                                    ⚠️ Notice
+                                  </span>
+                                )}
+                              </>
+                            ) : (
+                              <>
+                                <span
+                                  className="badge-provenance badge-ungrounded"
+                                  title={finalGrounding?.summary || 'Ungrounded content detected in transformation'}
+                                >
+                                  🚫 Ungrounded
+                                </span>
+                                {finalGrounding?.unverified_metrics?.length > 0 && (
+                                  <span
+                                    className="badge-provenance badge-unverified"
+                                    title={`Unverified metrics: ${finalGrounding.unverified_metrics.join(', ')}`}
+                                  >
+                                    ⚠️ {finalGrounding.unverified_metrics.length} Unverified Metric
+                                  </span>
+                                )}
+                                {finalGrounding?.unsupported_events?.length > 0 && (
+                                  <span
+                                    className="badge-provenance badge-unverified"
+                                    title={`Unsupported events: ${finalGrounding.unsupported_events.join(', ')}`}
+                                  >
+                                    ⚠️ Unsupported Event
+                                  </span>
+                                )}
+                                {finalGrounding?.unsupported_entities?.length > 0 && (
+                                  <span
+                                    className="badge-provenance badge-unverified"
+                                    title={`Unsupported entities: ${finalGrounding.unsupported_entities.join(', ')}`}
+                                  >
+                                    ⚠️ Unsupported Entity
+                                  </span>
+                                )}
+                              </>
                             )}
                             {(outputProv?.generation_action === 'refined' || outputProv?.refinement_applied) && (
                               <span
@@ -1152,25 +1507,18 @@ function App() {
                                 ✨ Refined
                               </span>
                             )}
-                            {(outputProv?.validation?.valid ?? outputProv?.validation?.is_valid) ? (
-                              <span
-                                className="badge-provenance badge-valid"
-                                title="Quality validation passed"
-                              >
-                                ✓ Validated
-                              </span>
-                            ) : outputProv?.validation?.severity === 'warning' ? (
-                              <span
-                                className="badge-provenance badge-warning"
-                                title={`Notice: ${outputProv.validation?.issues?.join(', ') || 'Validation warning'}`}
-                              >
-                                ⚠️ Notice
-                              </span>
-                            ) : null}
                           </div>
                         </div>
 
                         <div className="output-card-actions">
+                          <button
+                            type="button"
+                            className={`btn-audit-toggle ${openAuditCards[type] ? 'active' : ''}`}
+                            onClick={() => toggleAuditCard(type)}
+                            title="View factual grounding, claims, and validation audit"
+                          >
+                            🛡️ Audit
+                          </button>
                           <button
                             type="button"
                             className={`btn-refine ${isRefineOpen ? 'active' : ''}`}
@@ -1190,6 +1538,52 @@ function App() {
                           </button>
                         </div>
                       </div>
+
+                      {/* On-Demand Audit & Provenance Tray */}
+                      {openAuditCards[type] && (
+                        <div className="output-audit-tray">
+                          <div className="audit-tray-header">
+                            <span className="audit-tray-title">🛡️ Provenance & Grounding Audit · {type}</span>
+                            <span className="audit-tray-action-badge">
+                              Action: <strong>{outputProv?.generation_action || 'generated'}</strong>
+                            </span>
+                          </div>
+                          <div className="audit-tray-grid">
+                            <div className="audit-tray-item">
+                              <span className="audit-tray-item-label">Source Reference</span>
+                              <span className="audit-tray-item-val">{outputProv?.source_reference || result.metadata?.document_name || (result.metadata?.image_name ? `Image: ${result.metadata.image_name}` : null) || (result.metadata?.video_name ? `Video: ${result.metadata.video_name}` : null) || 'Direct Input'}</span>
+                            </div>
+                            <div className="audit-tray-item">
+                              <span className="audit-tray-item-label">Factual Grounding</span>
+                              <span className="audit-tray-item-val">
+                                {finalGrounding?.summary || (isGrounded ? 'All statements strictly verified against source.' : 'Unverified assertions detected.')}
+                              </span>
+                            </div>
+                            <div className="audit-tray-item">
+                              <span className="audit-tray-item-label">Claims Verified</span>
+                              <span className="audit-tray-item-val">
+                                {finalGrounding?.verified_count !== undefined
+                                  ? `${finalGrounding.verified_count} / ${finalGrounding.total_source_facts || finalGrounding.verified_count} claims verified`
+                                  : finalGrounding?.supported_claims_count !== undefined
+                                  ? `${finalGrounding.supported_claims_count} / ${finalGrounding.total_claims || finalGrounding.supported_claims_count} claims supported`
+                                  : isGrounded ? 'Grounding validated' : 'Ungrounded claims flagged'}
+                              </span>
+                            </div>
+                            <div className="audit-tray-item">
+                              <span className="audit-tray-item-label">Quality & Recovery Gate</span>
+                              <span className="audit-tray-item-val">
+                                {isRecovered
+                                  ? `Recovered via targeted self-healing (${outputProv?.recovery_call_count || 1} pass)`
+                                  : isValid
+                                  ? 'Direct clean pass · Grounding validated'
+                                  : finalVal?.issues?.length
+                                  ? finalVal.issues.join('; ')
+                                  : 'Validated'}
+                              </span>
+                            </div>
+                          </div>
+                        </div>
+                      )}
 
                       {/* Interactive Refinement Panel */}
                       {isRefineOpen && (
@@ -1407,10 +1801,110 @@ function App() {
                           );
                         })()}
 
+                        {/* Video Package Storyboard View */}
+                        {type === 'Video Package' && (() => {
+                          const storyboard = parseVideoStoryboard(content);
+                          if (!storyboard || storyboard.scenes.length < 2) return null;
+                          const isVisual = viewModes[type] !== 'raw';
+
+                          return (
+                            <div style={{ marginBottom: '0.75rem' }}>
+                              <div className="view-mode-bar">
+                                <span className="view-mode-title">🎬 Video Storyboard ({storyboard.scenes.length} Scenes)</span>
+                                <div className="view-mode-toggle">
+                                  <button
+                                    type="button"
+                                    className={`btn-toggle-view ${isVisual ? 'active' : ''}`}
+                                    onClick={() => toggleViewMode(type)}
+                                  >
+                                    Storyboard
+                                  </button>
+                                  <button
+                                    type="button"
+                                    className={`btn-toggle-view ${!isVisual ? 'active' : ''}`}
+                                    onClick={() => toggleViewMode(type)}
+                                  >
+                                    Raw Text
+                                  </button>
+                                </div>
+                              </div>
+
+                              {isVisual && (
+                                <div className="storyboard-container">
+                                  {storyboard.brief && (
+                                    <div className="storyboard-brief-banner">
+                                      <span className="storyboard-brief-icon">🎥</span>
+                                      <span className="storyboard-brief-text">{storyboard.brief}</span>
+                                    </div>
+                                  )}
+
+                                  <div className="storyboard-scenes-grid">
+                                    {storyboard.scenes.map((scene, sIdx) => (
+                                      <div key={sIdx} className="storyboard-scene-card">
+                                        <div className="storyboard-scene-header">
+                                          <span className="storyboard-scene-badge">Scene {scene.sceneNum}</span>
+                                          {scene.titleOrTime && (
+                                            <span className="storyboard-scene-timing">{scene.titleOrTime}</span>
+                                          )}
+                                        </div>
+
+                                        <div className="storyboard-scene-body">
+                                          {scene.visual && (
+                                            <div className="storyboard-field-row">
+                                              <span className="storyboard-field-label">👁️ Purpose / Visual</span>
+                                              <div className="storyboard-field-value">{scene.visual}</div>
+                                            </div>
+                                          )}
+
+                                          {scene.narration && (
+                                            <div className="storyboard-field-row narration-row">
+                                              <span className="storyboard-field-label">🎙️ Narration / Voiceover</span>
+                                              <div className="storyboard-field-value narration-value">{scene.narration}</div>
+                                            </div>
+                                          )}
+
+                                          {scene.onScreenText && (
+                                            <div className="storyboard-field-row onscreen-row">
+                                              <span className="storyboard-field-label">📺 On-Screen Text</span>
+                                              <div className="storyboard-field-value onscreen-value">{scene.onScreenText}</div>
+                                            </div>
+                                          )}
+
+                                          {scene.otherNotes.length > 0 && !scene.visual && !scene.narration && !scene.onScreenText && (
+                                            <div className="storyboard-field-row">
+                                              <span className="storyboard-field-label">📝 Scene Description</span>
+                                              <div className="storyboard-field-value">{scene.otherNotes.join(' ')}</div>
+                                            </div>
+                                          )}
+                                        </div>
+                                      </div>
+                                    ))}
+                                  </div>
+
+                                  {storyboard.recommendations && storyboard.recommendations.length > 0 && (
+                                    <div className="storyboard-recommendations-drawer">
+                                      <span className="storyboard-rec-title">🎬 Production Recommendations</span>
+                                      <div className="storyboard-rec-list">
+                                        {storyboard.recommendations.map((rec, rIdx) => (
+                                          <div key={rIdx} className="storyboard-rec-item">
+                                            <span className="storyboard-rec-bullet">•</span>
+                                            <span>{rec}</span>
+                                          </div>
+                                        ))}
+                                      </div>
+                                    </div>
+                                  )}
+                                </div>
+                              )}
+                            </div>
+                          );
+                        })()}
+
                         {/* Standard Raw Text Rendering for Non-Visual or when Raw view selected */}
-                        {((type !== 'Presentation' && type !== 'Infographic') ||
+                        {((type !== 'Presentation' && type !== 'Infographic' && type !== 'Video Package') ||
                           (type === 'Presentation' && (viewModes[type] === 'raw' || parsePresentationSlides(content).length < 2)) ||
-                          (type === 'Infographic' && (viewModes[type] === 'raw' || !parseInfographicData(content)))) && (
+                          (type === 'Infographic' && (viewModes[type] === 'raw' || !parseInfographicData(content))) ||
+                          (type === 'Video Package' && (viewModes[type] === 'raw' || !parseVideoStoryboard(content)))) && (
                           <div style={{ whiteSpace: 'pre-wrap' }}>{content}</div>
                         )}
                       </div>
